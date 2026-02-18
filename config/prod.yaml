@@ -1,0 +1,35 @@
+environment: prod
+llm_endpoint: databricks-meta-llama-3-3-70b-instruct
+embedding_endpoint: databricks-bge-large-en
+
+enable_retrieval: false
+vector_search_endpoint: mosaic_vs_endpoint_prod
+vector_search_index: prod.rag_catalog.doc_index
+vector_search_schema:
+  primary_key: doc_id
+  embedding_vector_column: embedding
+  text_column: content
+retrieval_k: 5
+
+temperature: 0.01
+max_tokens: 1500
+
+enable_date_tool: true
+enable_sql_tool: true
+
+workload_size: Medium
+endpoint_name: mosaic-agent-prod
+
+mlflow_experiment: /Shared/mosaic_agent_cicd
+model_name: prod.ml_models.mosaic_agent
+
+enable_guardrails: true
+guardrails:
+  input:
+    - pii_detection
+    - prompt_injection_filter
+    - toxicity_filter
+  output:
+    - pii_redaction
+    - groundedness_check
+    - confidence_threshold: 0.7

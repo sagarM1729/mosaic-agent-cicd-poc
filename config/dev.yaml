@@ -1,0 +1,19 @@
+environment: dev
+llm_endpoint: databricks-dbrx-instruct
+embedding_endpoint: databricks-gte-large-en
+
+# Vector Search config
+enable_retrieval: true
+vector_search_endpoint: mosaic_vs_endpoint
+vector_search_index: main.rag_catalog.doc_index
+vector_search_schema:
+  primary_key: doc_id
+…enable_sql_tool: false
+
+# Deployment
+workload_size: Small
+endpoint_name: mosaic-agent-dev
+
+# MLflow
+mlflow_experiment: /Shared/mosaic_agent_cicd
+model_name: main.ml_models.mosaic_agent

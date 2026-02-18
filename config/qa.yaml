@@ -1,0 +1,24 @@
+environment: qa
+llm_endpoint: databricks-meta-llama-3-1-8b-instruct
+embedding_endpoint: databricks-bge-large-en
+
+enable_retrieval: false
+vector_search_endpoint: mosaic_vs_endpoint
+vector_search_index: main.rag_catalog_qa.doc_index
+vector_search_schema:
+  primary_key: doc_id
+  embedding_vector_column: embedding
+  text_column: content
+retrieval_k: 5
+
+temperature: 0.05
+max_tokens: 1500
+
+enable_date_tool: true
+enable_sql_tool: false
+
+workload_size: Small
+endpoint_name: mosaic-agent-qa
+
+mlflow_experiment: /Shared/mosaic_agent_cicd
+model_name: main.ml_models.mosaic_agent
