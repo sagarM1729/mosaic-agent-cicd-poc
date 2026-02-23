@@ -1,0 +1,5 @@
+environment: prod
+catalog: cicd
+schema: prod_schema
+endpoint_name: agent-endpoint-prod
+secret_scope: prod-scope

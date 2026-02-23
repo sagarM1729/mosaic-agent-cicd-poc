@@ -1,0 +1,7 @@
+# config/dev.yaml
+environment: dev
+catalog: cicd
+schema: dev_schema
+endpoint_name: agent-endpoint-dev
+secret_scope: dev-scope
+ 
