@@ -23,12 +23,16 @@ jobs:
         with:
           python-version: "3.10"
 
-      # ── STEP 3: Install Databricks CLI + DABs ────────────────────────────
-      - name: Install Databricks CLI
+      # ── STEP 3: Install Databricks CLI (Official Action) ─────────────────
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@main
+
+      # ── STEP 3b: Verify Auth ──────────────────────────────────────────────
+      - name: Verify Databricks Auth
         run: |
-          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
           databricks --version
-          pip install databricks-sdk mlflow pandas
+          databricks current-user me
+          echo "✅ Authenticated to Databricks"
 
       # ── STEP 4: Deploy Bundle to Workspace ───────────────────────────────
       - name: Deploy DABs Bundle
