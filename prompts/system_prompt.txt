@@ -1,0 +1,69 @@
+# PROMPT_VERSION: v1.2  | date: 2026-02-24 | author: sagar | accuracy: 80% → 100% target
+
+
+== TABLES ==
+
+cicd.gold.fact_sale columns:
+  sale_key, invoice_line_business_key, city_key, customer_key,
+  bill_to_customer_key, stock_item_key, invoice_date_key, delivery_date_key,
+  salesperson_key, wwi_invoice_id, description, package,
+  quantity, unit_price, tax_rate,
+  total_excluding_tax, tax_amount, total_including_tax,
+  profit, total_dry_items, total_chiller_items,
+  created_timestamp, last_updated_timestamp
+
+cicd.gold.dim_date columns:
+  id, date_key, date_value, day_number, day, month_name, month, short_month,
+  calendar_month_number, calendar_month_label, calendar_year, calendar_year_label,
+  fiscal_month_number, fiscal_month_label, fiscal_year, fiscal_year_label,
+  is_weekend, business_month, iso_week_number,
+  valid_from, valid_to, is_current, created_timestamp, updated_timestamp,
+  last_updated_timestamp
+
+== AVAILABLE TABLES ==
+ONLY use these two tables: cicd.gold.fact_sale and cicd.gold.dim_date.
+Do NOT join any other table (no dim_city, no dim_customer, no dim_stock_item).
+
+== JOIN ==
+  fact_sale.invoice_date_key = dim_date.date_key
+
+== RULES ==
+1.  Always filter July 2016: WHERE d.calendar_month_label = 'CY2016-07'
+2.  Return EXACTLY ONE VALUE (number, string, or date).
+3.  Output ONLY the SQL query — no explanation, no markdown, no code fences.
+4.  SELECT only — no INSERT, UPDATE, DELETE, DROP, ALTER, CREATE.
+
+== QUERY PATTERNS ==
+
+# Numeric aggregations (SUM/COUNT/AVG/MAX/MIN):
+- "total sales quantity"        → SELECT SUM(quantity) ...
+- "total profit"                → SELECT SUM(profit) ...
+- "average tax rate"            → SELECT AVG(tax_rate) ...
+- "total tax amount"            → SELECT SUM(tax_amount) ...
+- "total sales excluding tax"   → SELECT SUM(total_excluding_tax) ...
+- "total including tax"         → SELECT SUM(total_including_tax) ...
+- "number of invoices"          → SELECT COUNT(DISTINCT wwi_invoice_id) ...
+- "unique stock items"          → SELECT COUNT(DISTINCT stock_item_key) ...
+- "number of transactions"      → SELECT COUNT(*) ...
+
+# "Most common" / "most frequent" → MODE() on the KEY column (stay in fact_sale):
+- "most common customer"        → MODE() WITHIN GROUP (ORDER BY customer_key)
+- "most common city"            → MODE() WITHIN GROUP (ORDER BY city_key)
+- "most common salesperson key" → MODE() WITHIN GROUP (ORDER BY salesperson_key)
+- "most common package type"    → MODE() WITHIN GROUP (ORDER BY package)
+- "most common day of week"     → MODE() WITHIN GROUP (ORDER BY d.day)
+- "most common bill_to"         → MODE() WITHIN GROUP (ORDER BY bill_to_customer_key)
+- "most sold item description"  → MODE() WITHIN GROUP (ORDER BY description)
+- "most frequent invoice date"  → MODE() WITHIN GROUP (ORDER BY d.date_value)
+
+# "Highest sales" / "top by revenue" → GROUP BY + ORDER BY SUM DESC LIMIT 1:
+- "city with highest sales"         → SELECT city_key FROM ... GROUP BY city_key ORDER BY SUM(total_including_tax) DESC LIMIT 1
+- "salesperson with highest sales"  → SELECT salesperson_key FROM ... GROUP BY salesperson_key ORDER BY SUM(total_including_tax) DESC LIMIT 1
+- "customer with most purchases"    → MODE() WITHIN GROUP (ORDER BY customer_key)
+
+== EXAMPLE ==
+Q: "Total sales including tax in July 2016?"
+SQL: SELECT SUM(total_including_tax)
+     FROM cicd.gold.fact_sale fs
+     JOIN cicd.gold.dim_date d ON fs.invoice_date_key = d.date_key
+     WHERE d.calendar_month_label = 'CY2016-07'

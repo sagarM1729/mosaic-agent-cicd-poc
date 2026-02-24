@@ -1,0 +1,89 @@
+name: Deploy Mosaic Agent to PROD
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+
+    steps:
+      # ── STEP 1: Checkout ──────────────────────────────────────────────────
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # ── STEP 2: Setup Python ──────────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      # ── STEP 3: Install Databricks CLI + DABs ────────────────────────────
+      - name: Install Databricks CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/databricks/setup-cli/main/install.sh | sh
+          databricks --version
+          pip install databricks-sdk mlflow pandas
+
+      # ── STEP 4: Deploy Bundle to Workspace ───────────────────────────────
+      - name: Deploy DABs Bundle
+        run: |
+          databricks bundle deploy --target default
+          echo "✅ Bundle deployed to Databricks workspace"
+
+      # ── STEP 5: Run Evaluation Job (Quality + Security Gate) ─────────────
+      - name: Run Evaluation (test.py via DABs)
+        id: run_eval
+        run: |
+          echo "🧪 Running evaluation job on ephemeral cluster..."
+          databricks bundle run mosaic_eval --output json > eval_output.json 2>&1 || true
+
+          # Check job result
+          if grep -q "FAILED" eval_output.json; then
+            echo "eval_passed=false" >> $GITHUB_OUTPUT
+            echo "🚨 Evaluation FAILED"
+            exit 1
+          else
+            echo "eval_passed=true" >> $GITHUB_OUTPUT
+            echo "✅ Evaluation PASSED"
+          fi
+
+      # ── STEP 6: Publish Step Summary (GitHub UI) ─────────────────────────
+      - name: Publish Evaluation Summary
+        if: always()
+        run: |
+          echo "## 🧪 Mosaic Agent Evaluation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Git SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Quality Gate** | ≥ 80% accuracy required |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Model** | \`cicd.gold.mosaic_nl_sql_agent\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status** | ${{ steps.run_eval.outputs.eval_passed == 'true' && '✅ PASSED' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pipeline Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Compute**: Ephemeral single-node cluster via DABs" >> $GITHUB_STEP_SUMMARY
+          echo "- **Evaluation**: 5 smoke + 30 golden questions" >> $GITHUB_STEP_SUMMARY
+          echo "- **Guardrails**: SQL safety + RAI output validation" >> $GITHUB_STEP_SUMMARY
+
+      # ── STEP 7: Register Model (only if eval passes) ─────────────────────
+      - name: Register Model in Unity Catalog
+        if: success()
+        run: |
+          echo "📦 Registering model to Unity Catalog..."
+          databricks bundle run mosaic_register
+          echo "✅ Model registered with @PROD alias"
+
+          # Add registration info to summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- Model registered: \`cicd.gold.mosaic_nl_sql_agent\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Alias \`@PROD\` updated to latest version" >> $GITHUB_STEP_SUMMARY
+          echo "- Git SHA: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

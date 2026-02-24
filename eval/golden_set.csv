@@ -1,0 +1,31 @@
+question,expected_answer
+What is the total sales quantity in July?,116830
+What is the total profit in July?,2902877.0
+What is the highest unit price in July?,345.0
+What is the lowest unit price in July?,5.0
+What is the average tax rate in July?,15.0
+What is the total tax amount in July?,865950.75
+What is the most sold item description in July?,Furry animal socks (Pink) L
+What is the total number of invoices in July?,12259
+What is the average profit per sale in July?,145.14
+What is the city with the highest sales in July?,275141
+What is the customer with the most purchases in July?,8134
+What is the most common package type sold in July?,Each
+What is the total number of chiller items sold in July?,0
+What is the total number of dry items sold in July?,40171
+What is the maximum quantity sold in a single sale in July?,120
+What is the minimum quantity sold in a single sale in July?,1
+What is the average total including tax per sale in July?,331.95
+What is the salesperson with the highest sales in July?,4525
+What is the number of unique stock items sold in July?,82
+What is the most frequent invoice date in July?,2016-07-30
+What is the total number of sales transactions in July?,20000
+What is the average unit price in July?,52.20
+What is the most common day of the week for sales in July?,Saturday
+What is the total sales excluding tax in July?,5773005.0
+What is the highest profit from a single sale in July?,1515.0
+What is the lowest profit from a single sale in July?,8.5
+What is the most common customer key in July?,8134
+What is the most common city key in July?,248960
+What is the most common salesperson key in July?,4531
+What is the most common bill_to_customer_key in July?,8066

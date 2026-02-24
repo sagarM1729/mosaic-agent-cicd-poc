@@ -1,0 +1,58 @@
+# Databricks Asset Bundle configuration
+# Used by DABs CLI: `databricks bundle deploy` / `databricks bundle run`
+# See: https://docs.databricks.com/dev-tools/bundles/index.html
+
+bundle:
+  name: mosaic-nl-sql-agent
+
+workspace:
+  host: https://adb-7405619257134796.16.azuredatabricks.net
+
+resources:
+  jobs:
+    # ── EVALUATION JOB (triggered by CI/CD) ─────────────────────────────────
+    mosaic_eval:
+      name: "mosaic-agent-evaluation"
+      tasks:
+        - task_key: run_tests
+          notebook_task:
+            notebook_path: ./tests/test.py
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "Standard_D4s_v3"
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
+    # ── REGISTRATION JOB (only after eval passes) ──────────────────────────
+    mosaic_register:
+      name: "mosaic-agent-register"
+      tasks:
+        - task_key: register_model
+          notebook_task:
+            notebook_path: ./scripts/register_model.py
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "Standard_D4s_v3"
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
+# Sync — files pushed to Databricks workspace on `bundle deploy`
+# Use sync.include for non-YAML files (Python, CSV, txt, etc.)
+sync:
+  include:
+    - "agents/*.py"
+    - "prompts/*.txt"
+    - "eval/*.py"
+    - "eval/*.csv"
+    - "tests/*.py"
+    - "scripts/*.py"
