@@ -9,8 +9,8 @@ jobs:
   validate-and-deploy:
     runs-on: ubuntu-latest
     env:
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_CICD }}
+      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_CICD }}
 
     steps:
       # ── STEP 1: Checkout ──────────────────────────────────────────────────
