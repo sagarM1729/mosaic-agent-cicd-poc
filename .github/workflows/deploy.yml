@@ -11,6 +11,7 @@ jobs:
     env:
       DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_CICD }}
       DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_CICD }}
+      UC_MODEL_NAME: cicd.gold.mosaic_nl_sql_agent
 
     steps:
       # ── STEP 1: Checkout ──────────────────────────────────────────────────
@@ -26,6 +27,10 @@ jobs:
       # ── STEP 3: Install Databricks CLI (Official Action) ─────────────────
       - name: Setup Databricks CLI
         uses: databricks/setup-cli@main
+
+      # ── STEP 3c: Install Python deps for helper scripts ───────────────────
+      - name: Install Python dependencies
+        run: pip install mlflow databricks-sdk --quiet
 
       # ── STEP 3b: Verify Auth ──────────────────────────────────────────────
       - name: Verify Databricks Auth
@@ -76,8 +81,20 @@ jobs:
           echo "- **Evaluation**: 5 smoke + 30 golden questions" >> $GITHUB_STEP_SUMMARY
           echo "- **Guardrails**: SQL safety + RAI output validation" >> $GITHUB_STEP_SUMMARY
 
-      # ── STEP 7: Register Model (only if eval passes) ─────────────────────
+      # ── STEP 7a: Save current @PROD version (for rollback safety) ────────
+      # Read the alias BEFORE touching anything so we can restore it if
+      # the next step fails.  Output: prod_version = "3" | "none"
+      - name: Save Current @PROD Version
+        id: save_prod
+        if: success()
+        run: |
+          PROD_VER=$(python scripts/get_prod_version.py)
+          echo "prod_version=${PROD_VER}" >> $GITHUB_OUTPUT
+          echo "📌 Current @PROD version: ${PROD_VER}"
+
+      # ── STEP 7b: Register Model (only if eval passes) ─────────────────────
       - name: Register Model in Unity Catalog
+        id: register_model
         if: success()
         run: |
           echo "📦 Registering model to Unity Catalog..."
@@ -90,3 +107,18 @@ jobs:
           echo "- Model registered: \`cicd.gold.mosaic_nl_sql_agent\`" >> $GITHUB_STEP_SUMMARY
           echo "- Alias \`@PROD\` updated to latest version" >> $GITHUB_STEP_SUMMARY
           echo "- Git SHA: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+
+      # ── STEP 8: Rollback @PROD if registration failed ─────────────────────
+      # Runs ONLY when the register step fails.  Re-points @PROD to the
+      # version we saved in Step 7a → production is never left broken.
+      - name: Rollback @PROD on Registration Failure
+        if: failure() && steps.save_prod.outputs.prod_version != ''
+        run: |
+          echo "🚨 Registration failed — rolling back @PROD..."
+          python scripts/rollback_prod.py --version ${{ steps.save_prod.outputs.prod_version }}
+
+          # Surface rollback in the Job Summary
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🔄 Rollback" >> $GITHUB_STEP_SUMMARY
+          echo "- Registration failed — @PROD restored to version \`${{ steps.save_prod.outputs.prod_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Production traffic unaffected" >> $GITHUB_STEP_SUMMARY

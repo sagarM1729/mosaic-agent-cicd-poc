@@ -14,7 +14,6 @@ If golden_set accuracy < 80%, exits with sys.exit(1) to block deployment.
 import sys
 import os
 import importlib.util
-import re
 
 # ── GET PROJECT ROOT ──────────────────────────────────────────────────────────
 try:
@@ -46,44 +45,10 @@ predict = mosaic_agent.predict
 # COMMAND ----------
 
 # ── GUARDRAIL VALIDATION ──────────────────────────────────────────────────────
-# These run alongside accuracy checks to ensure RAI + Security compliance.
-
-def validate_query_safety(sql: str) -> bool:
-    """SECURITY GATE: Enforces SELECT-only, blocks DML, and restricts to cicd.gold schema."""
-    sql_upper = sql.upper().strip()
-
-    # 1. SELECT-only enforcement
-    if not sql_upper.startswith("SELECT"):
-        return False
-
-    # 2. Block DML / DDL keywords
-    forbidden = ["DROP", "DELETE", "UPDATE", "INSERT", "GRANT", "TRUNCATE", "ALTER", "CREATE"]
-    if any(word in sql_upper for word in forbidden):
-        return False
-
-    # 3. Block queries referencing tables outside cicd.gold
-    if "FROM" in sql_upper and "cicd.gold" not in sql.lower():
-        return False
-
-    return True
-
-def validate_output_safety(answer: str) -> bool:
-    """RAI GATE: Prevents PII leakage, massive hallucinated data dumps, and row floods."""
-    answer_str = str(answer)
-
-    # 1. Block massive text dumps (hallucination / unbounded query result)
-    if len(answer_str) > 500:
-        return False
-
-    # 2. Block SSN / PII patterns (e.g. 123-45-6789)
-    if re.search(r'\d{3}-\d{2}-\d{4}', answer_str):
-        return False
-
-    # 3. Block data dumps — if answer has > 20 newlines, it's a table, not a scalar
-    if answer_str.count('\n') > 20:
-        return False
-
-    return True
+# Reuse the exact functions from the agent — single source of truth.
+# Tests exercise the same guardrail logic that runs in production.
+validate_query_safety  = mosaic_agent.validate_query_safety
+validate_output_safety = mosaic_agent.validate_output_safety
 
 # COMMAND ----------
 
