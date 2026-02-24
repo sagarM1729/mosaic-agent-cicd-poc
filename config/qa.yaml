@@ -1,6 +1,0 @@
-# config/qa.yaml
-environment: qa
-catalog: cicd
-schema: qa_schema
-endpoint_name: agent-endpoint-qa
-secret_scope: qa-scope
