@@ -20,7 +20,9 @@ try:
         .getDbutils().notebook().getContext()
         .notebookPath().get()
     )
-    project_root = "/Workspace/" + "/".join(notebook_path.strip("/").split("/")[:-1])
+    # notebook is at .../files/scripts/register_model
+    # project root is 2 levels up: strip 'register_model' AND 'scripts'
+    project_root = "/Workspace/" + "/".join(notebook_path.strip("/").split("/")[:-2])
 except Exception:
     project_root = "/Workspace/Users/sagarmeshram1729@gmail.com/databricks-cicd"
 

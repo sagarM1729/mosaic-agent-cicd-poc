@@ -63,7 +63,7 @@ class MosaicNLSQLAgent(mlflow.pyfunc.PythonModel):
 # Packages the agent + artifacts into MLflow and registers it in UC.
 # Each run creates a new version — full version history is kept.
 # ─────────────────────────────────────────────────────────────────────────────
-import re
+import re, subprocess
 
 UC_MODEL_NAME = "cicd.gold.mosaic_nl_sql_agent"
 mlflow.set_registry_uri("databricks-uc")
@@ -76,10 +76,24 @@ with open(prompt_path) as f:
 prompt_version = re.search(r"PROMPT_VERSION:\s*([\w\.]+)", first_line)
 prompt_version = prompt_version.group(1) if prompt_version else "unknown"
 
-with mlflow.start_run(run_name=f"deploy_{prompt_version}") as run:
-    mlflow.set_tag("prompt_version", prompt_version)
-    mlflow.set_tag("model_endpoint", "databricks-claude-3-7-sonnet")
-    mlflow.set_tag("deployment_mode", "unity_catalog_direct")
+# ── GIT SHA — for traceability (Cost Control §5.3 / Auditability §6) ──────────
+# Prefer the env var injected by GitHub Actions (GITHUB_SHA); fall back to
+# git rev-parse so local runs are also traceable.
+GIT_SHA = os.environ.get("GITHUB_SHA") or os.environ.get("GIT_SHA")
+if not GIT_SHA:
+    try:
+        GIT_SHA = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+    except Exception:
+        GIT_SHA = "unknown"
+print(f"[deploy] Git SHA: {GIT_SHA}")
+
+with mlflow.start_run(run_name=f"deploy_{prompt_version}_{str(GIT_SHA)[:8]}") as run:
+    mlflow.set_tag("prompt_version",   prompt_version)
+    mlflow.set_tag("git_sha",          GIT_SHA)          # ← traceability: pin run to commit
+    mlflow.set_tag("model_endpoint",   "databricks-claude-3-7-sonnet")
+    mlflow.set_tag("deployment_mode",  "unity_catalog_direct")
 
     model_info = mlflow.pyfunc.log_model(
         artifact_path         = "mosaic_agent",
@@ -96,6 +110,7 @@ with mlflow.start_run(run_name=f"deploy_{prompt_version}") as run:
 print(f"✅ Registered : {UC_MODEL_NAME}")
 print(f"✅ Run ID     : {run.info.run_id}")
 print(f"✅ Prompt     : {prompt_version}")
+print(f"✅ Git SHA    : {GIT_SHA}")
 
 # COMMAND ----------
 
