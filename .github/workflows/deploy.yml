@@ -41,16 +41,15 @@ jobs:
         id: run_eval
         run: |
           echo "🧪 Running evaluation job on ephemeral cluster..."
-          databricks bundle run mosaic_eval --output json > eval_output.json 2>&1 || true
-
-          # Check job result
-          if grep -q "FAILED" eval_output.json; then
-            echo "eval_passed=false" >> $GITHUB_OUTPUT
-            echo "🚨 Evaluation FAILED"
-            exit 1
-          else
+          # bundle run exits 1 if job fails (sys.exit(1) from quality gate flows through)
+          # No || true — we WANT this to fail the pipeline if accuracy < 80%
+          if databricks bundle run mosaic_eval; then
             echo "eval_passed=true" >> $GITHUB_OUTPUT
-            echo "✅ Evaluation PASSED"
+            echo "✅ Evaluation PASSED — accuracy >= 80%"
+          else
+            echo "eval_passed=false" >> $GITHUB_OUTPUT
+            echo "🚨 Evaluation FAILED — accuracy < 80% or guardrail violation"
+            exit 1
           fi
 
       # ── STEP 6: Publish Step Summary (GitHub UI) ─────────────────────────
