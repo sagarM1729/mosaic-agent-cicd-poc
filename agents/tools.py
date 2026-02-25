@@ -1,16 +1,19 @@
 """
 tools.py — Genie Space tools for the LangChain agent.
 
+Correct 4-step Genie API flow:
+  Step 1: POST  /spaces/{id}/start-conversation
+          → returns conversation_id + message_id
+  Step 2: GET   /spaces/{id}/conversations/{conv}/messages/{msg}
+          → poll until status == COMPLETED
+          → also returns attachments with attachment_id for each query
+  Step 3: GET   /spaces/{id}/conversations/{conv}/messages/{msg}/attachments/{att}/query-result
+          → returns statement_response → result → data_typed_array
+          → this is the ACTUAL SQL result data
+
 Two tools:
-  1. sales_genie_tool     → calls Sales_Expert Genie Space
-  2. inventory_genie_tool → calls Inventory_Expert Genie Space
-
-Each tool uses the Databricks Genie API to:
-  - Start a conversation with the question
-  - Poll until the Genie Space produces a result
-  - Return the answer string
-
-Falls back to direct SQL execution if Genie cannot answer.
+  1. sales_genie_tool     → Sales_Expert Genie Space
+  2. inventory_genie_tool → Inventory_Expert Genie Space
 """
 
 import os
@@ -21,27 +24,22 @@ import requests
 from agents.config import (
     SALES_GENIE_SPACE_ID,
     INVENTORY_GENIE_SPACE_ID,
-    SALES_TABLES,
-    INVENTORY_TABLES,
 )
 
+
 # ── DATABRICKS AUTH ──────────────────────────────────────────────────────────
-# In Databricks notebooks, the token is auto-injected.
-# In CI/CD (GitHub Actions), it comes from environment variables.
 
 def _get_headers():
     """Build auth headers for the Databricks REST API."""
     token = os.environ.get("DATABRICKS_TOKEN")
     if not token:
-        # Inside a Databricks notebook, use the built-in token
         try:
-            from dbruntime.sdk import get_token
+            from dbruntime.sdk import get_token          # noqa: F821
             token = get_token()
         except Exception:
             pass
     if not token:
         try:
-            # Another notebook fallback
             token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()  # noqa: F821
         except Exception:
             pass
@@ -69,47 +67,55 @@ def _get_host():
     return host.rstrip("/")
 
 
-# ── GENIE API HELPERS ────────────────────────────────────────────────────────
+# ── GENIE API — CORRECT 4-STEP FLOW ─────────────────────────────────────────
 
 def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> str:
     """
     Call a Databricks Genie Space via REST API.
 
-    Flow:
-      1. POST /api/2.0/genie/spaces/{space_id}/start-conversation
-         → returns conversation_id + message_id
-      2. GET  /api/2.0/genie/spaces/{space_id}/conversations/{conv_id}/messages/{msg_id}
-         → poll until status is COMPLETED or FAILED
-      3. Extract the result from the response
+    Correct flow:
+      Step 1: POST  start-conversation              → conversation_id, message_id
+      Step 2: GET   messages/{msg_id}               → poll until COMPLETED
+                    also extracts attachment_id from each query attachment
+      Step 3: GET   messages/{msg_id}/attachments/{att_id}/query-result
+                    → statement_response.result.data_typed_array
+                    → extract first value
+      Step 4: Fallback to text attachment if no query result
 
-    Returns the answer as a string, or an error message.
+    Returns the answer as a string, or a GENIE_ERROR string on failure.
     """
-    host = _get_host()
+    host    = _get_host()
     headers = _get_headers()
 
     # ── Step 1: Start conversation ────────────────────────────────────────
     start_url = f"{host}/api/2.0/genie/spaces/{space_id}/start-conversation"
-    payload = {"content": question}
-
     try:
-        resp = requests.post(start_url, headers=headers, json=payload, timeout=30)
+        resp = requests.post(
+            start_url,
+            headers=headers,
+            json={"content": question},
+            timeout=30,
+        )
         resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         return f"GENIE_ERROR: Failed to start conversation: {e}"
 
-    data = resp.json()
+    data            = resp.json()
     conversation_id = data.get("conversation_id")
-    message_id = data.get("message_id")
+    message_id      = data.get("message_id")
 
     if not conversation_id or not message_id:
-        return f"GENIE_ERROR: Missing conversation_id or message_id in response: {json.dumps(data)}"
+        return f"GENIE_ERROR: Missing ids in start-conversation response: {json.dumps(data)}"
 
-    # ── Step 2: Poll for result ───────────────────────────────────────────
+    print(f"  [Genie] conversation={conversation_id}  message={message_id}")
+
+    # ── Step 2: Poll message until COMPLETED ──────────────────────────────
     poll_url = (
         f"{host}/api/2.0/genie/spaces/{space_id}"
         f"/conversations/{conversation_id}/messages/{message_id}"
     )
 
+    msg_data = None
     start_time = time.time()
     while time.time() - start_time < max_wait:
         try:
@@ -119,118 +125,94 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> str:
             return f"GENIE_ERROR: Polling failed: {e}"
 
         msg_data = poll_resp.json()
-        status = msg_data.get("status", "UNKNOWN")
+        status   = msg_data.get("status", "UNKNOWN")
+        print(f"  [Genie] status={status}")
 
         if status == "COMPLETED":
-            # ── Step 3: Extract answer ────────────────────────────────────
-            return _extract_genie_answer(msg_data)
-
+            break
         elif status in ("FAILED", "CANCELLED"):
-            error_msg = msg_data.get("error", "Unknown error from Genie Space")
+            error_msg = msg_data.get("error", "Unknown Genie error")
             return f"GENIE_ERROR: {status}: {error_msg}"
 
-        # Still executing — wait and retry
         time.sleep(3)
+    else:
+        return "GENIE_ERROR: Timed out waiting for Genie Space response."
 
-    return "GENIE_ERROR: Timed out waiting for Genie Space response."
-
-
-def _extract_genie_answer(msg_data: dict) -> str:
-    """
-    Extract the final answer from a completed Genie message response.
-    Genie may return the answer in various structures — handle all.
-    """
-    # Try 'attachments' → 'query' → 'result' path (SQL result)
+    # ── Step 3: Fetch query result from each query attachment ─────────────
+    # The message attachments array tells us which attachments have SQL results.
+    # We must call a SEPARATE endpoint to get the actual data rows.
     attachments = msg_data.get("attachments", [])
+    print(f"  [Genie] {len(attachments)} attachment(s) in message")
+
     for attachment in attachments:
-        # Check for query result
-        query_result = attachment.get("query", {}).get("result")
-        if query_result:
-            # result could be a data table or a scalar
-            columns = query_result.get("columns", [])
-            data_rows = query_result.get("data_array", [])
+        attachment_id = attachment.get("attachment_id") or attachment.get("id")
 
-            if data_rows and len(data_rows) > 0:
-                # Return the first cell of the first row for single-value answers
-                if len(data_rows) == 1 and len(data_rows[0]) == 1:
-                    return str(data_rows[0][0])
-                # For multi-row results, format as a simple string
-                if len(data_rows) == 1:
-                    return " | ".join(str(cell) for cell in data_rows[0])
-                # Multiple rows — return first row's first cell
-                return str(data_rows[0][0])
+        # ── 3a: Query attachment → call query-result endpoint ─────────────
+        if attachment.get("query") is not None and attachment_id:
+            query_result_url = (
+                f"{host}/api/2.0/genie/spaces/{space_id}"
+                f"/conversations/{conversation_id}"
+                f"/messages/{message_id}"
+                f"/attachments/{attachment_id}/query-result"
+            )
+            try:
+                qr_resp = requests.get(query_result_url, headers=headers, timeout=30)
+                qr_resp.raise_for_status()
+                qr_data = qr_resp.json()
+            except requests.exceptions.RequestException as e:
+                print(f"  [Genie] query-result fetch failed: {e}")
+                continue
 
-        # Check for text content
-        text_content = attachment.get("text", {}).get("content")
+            print(f"  [Genie] query-result raw keys: {list(qr_data.keys())}")
+
+            # Navigate: statement_response → result → data_typed_array
+            stmt_resp = qr_data.get("statement_response", {})
+            result    = stmt_resp.get("result", {})
+
+            # data_typed_array: list of {values: [{str: "..."} or {null: {}}]}
+            data_typed = result.get("data_typed_array", [])
+            if data_typed:
+                first_row    = data_typed[0]
+                values       = first_row.get("values", [])
+                if values:
+                    # Each value is {"str": "123.45"} or {"null": {}}
+                    cell = values[0]
+                    if "str" in cell:
+                        return cell["str"]
+                    if "i64" in cell:
+                        return str(cell["i64"])
+                    if "f64" in cell:
+                        return str(cell["f64"])
+                    if "bool" in cell:
+                        return str(cell["bool"])
+                    if "null" in cell:
+                        return "NULL"
+                    # Unknown format — stringify whole cell
+                    return str(cell)
+
+            # Fallback: try data_array (older API response format)
+            data_array = result.get("data_array", [])
+            if data_array:
+                return str(data_array[0][0])
+
+            # Fallback: check manifest for column names + try other paths
+            manifest = stmt_resp.get("manifest", {})
+            print(f"  [Genie] manifest schema: {manifest.get('schema', {})}")
+
+        # ── 3b: Text attachment → return the text directly ────────────────
+        text_content = attachment.get("text", {}).get("content", "")
         if text_content:
-            return text_content
+            return text_content.strip()
 
-    # Fallback: check top-level content
-    content = msg_data.get("content")
+    # ── Step 4: Last resort — top-level content ───────────────────────────
+    content = msg_data.get("content", "")
     if content:
-        return content
+        return content.strip()
 
-    return "GENIE_ERROR: Could not extract answer from Genie response."
-
-# ── SPARK FALLBACK (injected by test.py / deploy.py after module load) ────────
-# When Genie Space API fails, we fall back to direct Spark SQL execution.
-# This is set by the notebook: tools_module.spark = spark
-spark = None
-
-
-def _spark_sql_fallback(question: str, domain: str) -> str:
-    """
-    Fallback: ask the LLM to generate SQL and run it directly on Spark.
-    Used when Genie Space API is unavailable or returns an error.
-    """
-    if spark is None:
-        return "FALLBACK_ERROR: spark not injected and Genie Space unavailable."
-
-    try:
-        from mlflow.deployments import get_deploy_client
-        import os
-
-        # Load system prompt context
-        prompt_path = os.path.join(os.path.dirname(__file__), "..", "prompts", "system_prompt.txt")
-        try:
-            with open(os.path.abspath(prompt_path), "r") as f:
-                system_prompt = f.read()
-        except Exception:
-            system_prompt = "You are a SQL expert. Generate a single-value SELECT query."
-
-        client = get_deploy_client("databricks")
-        endpoint = os.environ.get("MODEL_ENDPOINT", "databricks-claude-3-7-sonnet")
-        response = client.predict(
-            endpoint=endpoint,
-            inputs={
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": f"Generate SQL for: {question}"}
-                ],
-                "temperature": 0.1,
-                "max_tokens": 400,
-            }
-        )
-        sql = response["choices"][0]["message"]["content"].strip()
-
-        # Strip markdown fences if present
-        if sql.startswith("```"):
-            sql = "\n".join(
-                line for line in sql.splitlines()
-                if not line.strip().startswith("```")
-            ).strip()
-
-        print(f"[FALLBACK] 🔄 Running SQL directly: {sql[:120]}")
-        df     = spark.sql(sql)
-        result = df.collect()[0][0]
-        return str(result) if result is not None else "0"
-
-    except Exception as e:
-        return f"FALLBACK_ERROR: {str(e)}"
+    return f"GENIE_ERROR: Could not extract answer. Attachment keys: {[list(a.keys()) for a in attachments]}"
 
 
 # ── LANGCHAIN TOOL DEFINITIONS ───────────────────────────────────────────────
-# These functions are what the LangChain agent will call.
 
 def sales_genie_tool(question: str) -> str:
     """
@@ -247,13 +229,6 @@ def sales_genie_tool(question: str) -> str:
     print(f"[TOOL] 📊 Routing to Sales_Expert Genie Space: {question}")
     result = _call_genie_space(SALES_GENIE_SPACE_ID, question)
     print(f"[TOOL] 📊 Sales_Expert result: {result}")
-
-    # Fallback to direct SQL if Genie fails
-    if result.startswith("GENIE_ERROR"):
-        print(f"[TOOL] ⚠️  Genie failed, using SQL fallback for sales domain")
-        result = _spark_sql_fallback(question, "sales")
-        print(f"[TOOL] 🔄 Fallback result: {result}")
-
     return result
 
 
@@ -271,12 +246,4 @@ def inventory_genie_tool(question: str) -> str:
     print(f"[TOOL] 📦 Routing to Inventory_Expert Genie Space: {question}")
     result = _call_genie_space(INVENTORY_GENIE_SPACE_ID, question)
     print(f"[TOOL] 📦 Inventory_Expert result: {result}")
-
-    # Fallback to direct SQL if Genie fails
-    if result.startswith("GENIE_ERROR"):
-        print(f"[TOOL] ⚠️  Genie failed, using SQL fallback for inventory domain")
-        result = _spark_sql_fallback(question, "inventory")
-        print(f"[TOOL] 🔄 Fallback result: {result}")
-
     return result
-

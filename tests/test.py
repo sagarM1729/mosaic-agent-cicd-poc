@@ -63,13 +63,6 @@ mosaic_agent = importlib.util.module_from_spec(spec)
 sys.modules["mosaic_agent"] = mosaic_agent
 spec.loader.exec_module(mosaic_agent)
 
-# Inject spark into the tools module so SQL fallback works
-# (Genie Space API will try first; fallback uses Spark directly)
-try:
-    sys.modules["agents.tools"].spark = spark
-except Exception as e:
-    print(f"[WARN] Could not inject spark into tools module: {e}")
-
 predict = mosaic_agent.predict
 
 # COMMAND ----------
