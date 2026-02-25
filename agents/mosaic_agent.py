@@ -123,18 +123,9 @@ def _build_agent():
     react_template = """You are a data analytics assistant with access to two specialized tools.
 Your job is to answer the user's question by choosing the RIGHT tool.
 
-DECISION RULES:
-- If the question is about sales, revenue, profit, tax, invoices, customers,
-  salesperson, cities, package types, or quantities sold → use Sales_Expert
-- If the question is about stock items, inventory, stock holdings, bin locations,
-  reorder levels, cost prices, colors, brands, packaging → use Inventory_Expert
-- If the question is about dates, calendar, weekends, years, months (general) →
-  use Sales_Expert (dim_date is available in both, but prefer Sales_Expert for general date questions)
-- NEVER make up an answer. ALWAYS use one of the tools.
-
-== DOMAIN KNOWLEDGE & SQL PATTERNS ==
+== ROUTING RULES & DOMAIN KNOWLEDGE ==
 {system_prompt}
-== END DOMAIN KNOWLEDGE ==
+== END ROUTING RULES ==
 
 You have access to the following tools:
 
