@@ -64,9 +64,19 @@ def _build_agent():
     Uses ChatDatabricks as the LLM (routes to Databricks Model Serving).
     """
     from langchain_community.chat_models import ChatDatabricks
-    from langchain.agents import AgentExecutor, create_react_agent
-    from langchain.tools import Tool
     from langchain_core.prompts import PromptTemplate
+
+    # AgentExecutor / create_react_agent moved across langchain versions
+    try:
+        from langchain.agents import AgentExecutor, create_react_agent
+    except ImportError:
+        from langchain.agents.agent import AgentExecutor
+        from langchain.agents.react.agent import create_react_agent
+
+    try:
+        from langchain.tools import Tool
+    except ImportError:
+        from langchain_core.tools import Tool
 
     # ── Import our Genie tools ────────────────────────────────────────────
     from agents.tools import sales_genie_tool, inventory_genie_tool

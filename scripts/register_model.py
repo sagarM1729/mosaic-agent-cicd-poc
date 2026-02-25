@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install mlflow langchain langchain-community databricks-sdk requests
+# MAGIC %pip install mlflow langchain==0.2.16 langchain-community==0.2.17 langchain-core==0.2.41 databricks-sdk requests
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
