@@ -152,7 +152,17 @@ def run_evaluation(dataset_name: str, df):
 # COMMAND ----------
 
 # ── GOLDEN SET ────────────────────────────────────────────────────────────────
-golden_df  = spark.table("cicd.gold.golden_set")
+# Load from repo CSV (NOT from Delta table) so that changes in eval/golden_set.csv
+# are immediately reflected in the CI/CD quality gate.
+import pandas as pd
+
+golden_csv_path = os.path.join(project_root, "eval", "golden_set.csv")
+print(f"[test.py] Loading golden set from: {golden_csv_path}")
+golden_pdf = pd.read_csv(golden_csv_path)
+print(f"[test.py] Golden set loaded: {len(golden_pdf)} questions")
+
+# Convert to Spark DataFrame so run_evaluation() (which calls .collect()) works
+golden_df  = spark.createDataFrame(golden_pdf.astype(str))
 golden_acc = run_evaluation("GOLDEN SET", golden_df)
 
 # COMMAND ----------

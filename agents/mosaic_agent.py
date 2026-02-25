@@ -117,7 +117,9 @@ def _build_agent():
     ]
 
     # ── ReAct Prompt ──────────────────────────────────────────────────────
-    # This instructs the LLM how to reason step-by-step and pick tools.
+    # SYSTEM_PROMPT is loaded from prompts/system_prompt.txt so that changes
+    # to the prompt file actually affect agent behaviour (SQL patterns, month
+    # filters, domain rules, etc.)
     react_template = """You are a data analytics assistant with access to two specialized tools.
 Your job is to answer the user's question by choosing the RIGHT tool.
 
@@ -130,17 +132,21 @@ DECISION RULES:
   use Sales_Expert (dim_date is available in both, but prefer Sales_Expert for general date questions)
 - NEVER make up an answer. ALWAYS use one of the tools.
 
+== DOMAIN KNOWLEDGE & SQL PATTERNS ==
+{system_prompt}
+== END DOMAIN KNOWLEDGE ==
+
 You have access to the following tools:
 
-{tools}
+{{tools}}
 
-Tool names: {tool_names}
+Tool names: {{tool_names}}
 
 Use the following format:
 
 Question: the input question you must answer
 Thought: I need to figure out which domain this question belongs to
-Action: the tool to use, must be one of [{tool_names}]
+Action: the tool to use, must be one of [{{tool_names}}]
 Action Input: the question to pass to the tool
 Observation: the result from the tool
 Thought: I now know the final answer
@@ -152,8 +158,8 @@ If the tool returns a name or text, return just that text.
 
 Begin!
 
-Question: {input}
-Thought: {agent_scratchpad}"""
+Question: {{input}}
+Thought: {{agent_scratchpad}}""".format(system_prompt=SYSTEM_PROMPT)
 
     prompt = PromptTemplate(
         input_variables=["input", "agent_scratchpad", "tools", "tool_names"],

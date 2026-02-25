@@ -1,40 +1,30 @@
 question,expected_answer
 What is the maximum quantity on hand?,959369
-Which customer made the most purchases in August?,Wingtip Toys (johnetta, Ky)
+Which customer made the most purchases in July?,Wingtip Toys (johnetta, Ky)
 How many unique stock items exist?,227
-What is the total profit generated in August?,2902877.0
+What is the total profit generated in July?,2902877.0
 What is the earliest date?,2010-01-01
-What is the total sales excluding tax in August?,5773005.0
+What is the total sales excluding tax in July?,5773005.0
 How many weekend days exist?,2192
 Which bin has highest stock?,L-3
-What is the most popular package type in August?,Each
-How many unique customers purchased in August?,666
+What is the most popular package type in July?,Each
+How many unique customers purchased in July?,666
 What is the average tax rate?,14.82
-What is the total number of invoices in August?,12259
-Which product had the highest sales in August?,Ride on big wheel monster truck (Black) 1/12 scale
+What is the total number of invoices in July?,12259
+Which product had the highest sales in July?,Ride on big wheel monster truck (Black) 1/12 scale
 How many records have reorder level >10?,132
-What is the average unit price in August?,52.20
+What is the average unit price in July?,52.20
 Which item has highest tax rate?,Usb Missile Launcher (green)
-What is the most common day of sales in August?,Saturday
-What is the total quantity sold in August?,116830
+What is the most common day of sales in July?,Saturday
+What is the total quantity sold in July?,116830
 Latest stock record timestamp?,2026-02-06T10:31:45.522Z
 What is the average cost price?,22.50
 How many black color items exist?,51
-What is the total sales amount for August?,6638955.75
-What is the most frequent invoice date in August?,2016-07-30
+What is the total sales amount for July?,6638955.75
+What is the most frequent invoice date in July?,2016-07-30
 How many Northwind brand items exist?,18
-Which salesperson generated the most revenue in August?,4525
-What is the average profit per transaction in August?,145.14
+Which salesperson generated the most revenue in July?,4525
+What is the average profit per transaction in July?,145.14
 Total quantity on hand?,23273424
 List unit package types?,Bag|Pair|Each|Packet
 How many items have null color?,99
-What is the average quantity per sale in August?,5.84
-How many sales transactions occurred in August?,20000
-Which stock item had the highest profit in August?,8
-List all months available?,All 12 months
-Top stock item keys by target level?,220|222|223
-What is the average tax amount per sale in August?,43.30
-What are the most common colors?,Unknown|Black|White|Blue|Steel Gray
-Which city had the highest sales in August?,275141
-What is the total number of chiller items sold in August?,0
-How many unique years exist?,21
