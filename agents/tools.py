@@ -172,6 +172,62 @@ def _extract_genie_answer(msg_data: dict) -> str:
 
     return "GENIE_ERROR: Could not extract answer from Genie response."
 
+# ── SPARK FALLBACK (injected by test.py / deploy.py after module load) ────────
+# When Genie Space API fails, we fall back to direct Spark SQL execution.
+# This is set by the notebook: tools_module.spark = spark
+spark = None
+
+
+def _spark_sql_fallback(question: str, domain: str) -> str:
+    """
+    Fallback: ask the LLM to generate SQL and run it directly on Spark.
+    Used when Genie Space API is unavailable or returns an error.
+    """
+    if spark is None:
+        return "FALLBACK_ERROR: spark not injected and Genie Space unavailable."
+
+    try:
+        from mlflow.deployments import get_deploy_client
+        import os
+
+        # Load system prompt context
+        prompt_path = os.path.join(os.path.dirname(__file__), "..", "prompts", "system_prompt.txt")
+        try:
+            with open(os.path.abspath(prompt_path), "r") as f:
+                system_prompt = f.read()
+        except Exception:
+            system_prompt = "You are a SQL expert. Generate a single-value SELECT query."
+
+        client = get_deploy_client("databricks")
+        endpoint = os.environ.get("MODEL_ENDPOINT", "databricks-claude-3-7-sonnet")
+        response = client.predict(
+            endpoint=endpoint,
+            inputs={
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": f"Generate SQL for: {question}"}
+                ],
+                "temperature": 0.1,
+                "max_tokens": 400,
+            }
+        )
+        sql = response["choices"][0]["message"]["content"].strip()
+
+        # Strip markdown fences if present
+        if sql.startswith("```"):
+            sql = "\n".join(
+                line for line in sql.splitlines()
+                if not line.strip().startswith("```")
+            ).strip()
+
+        print(f"[FALLBACK] 🔄 Running SQL directly: {sql[:120]}")
+        df     = spark.sql(sql)
+        result = df.collect()[0][0]
+        return str(result) if result is not None else "0"
+
+    except Exception as e:
+        return f"FALLBACK_ERROR: {str(e)}"
+
 
 # ── LANGCHAIN TOOL DEFINITIONS ───────────────────────────────────────────────
 # These functions are what the LangChain agent will call.
@@ -191,6 +247,13 @@ def sales_genie_tool(question: str) -> str:
     print(f"[TOOL] 📊 Routing to Sales_Expert Genie Space: {question}")
     result = _call_genie_space(SALES_GENIE_SPACE_ID, question)
     print(f"[TOOL] 📊 Sales_Expert result: {result}")
+
+    # Fallback to direct SQL if Genie fails
+    if result.startswith("GENIE_ERROR"):
+        print(f"[TOOL] ⚠️  Genie failed, using SQL fallback for sales domain")
+        result = _spark_sql_fallback(question, "sales")
+        print(f"[TOOL] 🔄 Fallback result: {result}")
+
     return result
 
 
@@ -208,4 +271,12 @@ def inventory_genie_tool(question: str) -> str:
     print(f"[TOOL] 📦 Routing to Inventory_Expert Genie Space: {question}")
     result = _call_genie_space(INVENTORY_GENIE_SPACE_ID, question)
     print(f"[TOOL] 📦 Inventory_Expert result: {result}")
+
+    # Fallback to direct SQL if Genie fails
+    if result.startswith("GENIE_ERROR"):
+        print(f"[TOOL] ⚠️  Genie failed, using SQL fallback for inventory domain")
+        result = _spark_sql_fallback(question, "inventory")
+        print(f"[TOOL] 🔄 Fallback result: {result}")
+
     return result
+

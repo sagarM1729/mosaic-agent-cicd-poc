@@ -63,6 +63,13 @@ mosaic_agent = importlib.util.module_from_spec(spec)
 sys.modules["mosaic_agent"] = mosaic_agent
 spec.loader.exec_module(mosaic_agent)
 
+# Inject spark into the tools module so SQL fallback works
+# (Genie Space API will try first; fallback uses Spark directly)
+try:
+    sys.modules["agents.tools"].spark = spark
+except Exception as e:
+    print(f"[WARN] Could not inject spark into tools module: {e}")
+
 predict = mosaic_agent.predict
 
 # COMMAND ----------
@@ -157,6 +164,8 @@ print("=" * 65)
 if golden_acc < QUALITY_GATE_THRESHOLD:
     print(f"\n🚨 Quality Gate FAILED! {golden_acc:.1f}% < {QUALITY_GATE_THRESHOLD}%")
     print("   Blocking deployment. Fix the prompt or agent logic.")
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 else:
     print(f"\n✅ Quality Gate PASSED. Safe to deploy.")
