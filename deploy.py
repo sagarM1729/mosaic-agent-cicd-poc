@@ -20,6 +20,15 @@ except Exception:
 
 print(f"Project root: {project_root}")
 
+# ── INJECT DATABRICKS CREDENTIALS AS ENV VARS ────────────────────────────────
+try:
+    ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+    os.environ["DATABRICKS_TOKEN"] = ctx.apiToken().get()
+    os.environ["DATABRICKS_HOST"]  = ctx.apiUrl().get()
+    print(f"[deploy] ✅ Injected credentials from dbutils")
+except Exception as e:
+    print(f"[deploy] ⚠️  Could not inject credentials: {e}")
+
 # Add project root to sys.path so `from agents.config import ...` works
 if project_root not in sys.path:
     sys.path.insert(0, project_root)

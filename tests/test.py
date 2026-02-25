@@ -28,6 +28,20 @@ except Exception:
 
 print(f"Project root: {project_root}")
 
+# ── INJECT DATABRICKS CREDENTIALS AS ENV VARS ────────────────────────────────
+# dbutils is available here in the notebook context, but NOT inside Python
+# files loaded via importlib. So we extract the token/host NOW and set them
+# as env vars so tools.py can read them.
+try:
+    ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
+    token = ctx.apiToken().get()
+    host  = ctx.apiUrl().get()
+    os.environ["DATABRICKS_TOKEN"] = token
+    os.environ["DATABRICKS_HOST"]  = host
+    print(f"[test.py] ✅ Injected DATABRICKS_TOKEN + HOST from dbutils  host={host}")
+except Exception as e:
+    print(f"[test.py] ⚠️  Could not inject credentials from dbutils: {e}")
+
 # Add project root to sys.path so `from agents.config import ...` works
 if project_root not in sys.path:
     sys.path.insert(0, project_root)

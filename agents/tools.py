@@ -28,64 +28,19 @@ from agents.config import (
 
 
 # ── DATABRICKS AUTH ──────────────────────────────────────────────────────────
-# 3-layer auth strategy (in order of preference):
-#   1. SparkContext  — always available on Databricks cluster, no dbutils needed
-#   2. Databricks SDK credential provider — works for some auth configs
-#   3. Environment variables — for CI/CD / local development
+# The calling notebook (test.py / deploy.py / register_model.py) extracts
+# credentials from dbutils and sets them as env vars BEFORE loading this module.
+# This module simply reads DATABRICKS_HOST + DATABRICKS_TOKEN.
 
 def _get_auth():
     """
     Returns (host, headers) for Databricks REST API calls.
-    Works inside job clusters (via SparkContext), notebooks, and CI/CD.
+    Reads env vars set by the calling notebook (which has dbutils access).
     """
-
-    # ── Layer 1: SparkContext ─────────────────────────────────────────────
-    # On every Databricks cluster, SparkContext holds the cluster token.
-    try:
-        from pyspark import SparkContext
-        sc    = SparkContext.getOrCreate()
-        token = sc._conf.get("spark.databricks.token", "")
-        url   = sc._conf.get("spark.databricks.workspaceUrl", "")
-        if token and url:
-            host = f"https://{url}".rstrip("/")
-            print(f"[tools] Auth via SparkContext ✅  host={host}")
-            return host, {
-                "Authorization": f"Bearer {token}",
-                "Content-Type":  "application/json",
-            }
-    except Exception as e:
-        print(f"[tools] SparkContext auth failed: {e}")
-
-    # ── Layer 2: Databricks SDK credential provider ───────────────────────
-    try:
-        from databricks.sdk import WorkspaceClient
-        w = WorkspaceClient()
-        host = w.config.host.rstrip("/")
-        # Use the SDK's credential provider to get live headers
-        creds_provider = w.config.credentials_provider()
-        if creds_provider:
-            sdk_headers = creds_provider(w.config)
-            if sdk_headers and callable(sdk_headers):
-                sdk_headers = sdk_headers()
-            if sdk_headers:
-                sdk_headers["Content-Type"] = "application/json"
-                print(f"[tools] Auth via SDK credential provider ✅  host={host}")
-                return host, sdk_headers
-        # Last resort: try config.token (PAT / env var token)
-        token = w.config.token
-        if token:
-            print(f"[tools] Auth via SDK token ✅  host={host}")
-            return host, {
-                "Authorization": f"Bearer {token}",
-                "Content-Type":  "application/json",
-            }
-    except Exception as e:
-        print(f"[tools] SDK auth failed: {e}")
-
-    # ── Layer 3: Explicit environment variables ────────────────────────────
-    host  = os.environ.get("DATABRICKS_HOST", "https://adb-7405619257134796.16.azuredatabricks.net").rstrip("/")
+    host  = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
     token = os.environ.get("DATABRICKS_TOKEN", "")
-    if token:
+
+    if host and token:
         print(f"[tools] Auth via env vars ✅  host={host}")
         return host, {
             "Authorization": f"Bearer {token}",
@@ -93,9 +48,9 @@ def _get_auth():
         }
 
     raise RuntimeError(
-        "No Databricks credentials found. Tried: SparkContext, SDK, env vars.\n"
-        "  On cluster: pyspark must be available (it always is on Databricks).\n"
-        "  Locally:    set DATABRICKS_HOST + DATABRICKS_TOKEN env vars."
+        "DATABRICKS_HOST or DATABRICKS_TOKEN not set.\n"
+        "The calling notebook must inject these from dbutils before loading tools.py.\n"
+        "Example:  os.environ['DATABRICKS_TOKEN'] = ctx.apiToken().get()"
     )
 
 
