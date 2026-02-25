@@ -28,43 +28,45 @@ from agents.config import (
 
 
 # ── DATABRICKS AUTH ──────────────────────────────────────────────────────────
+# Use the Databricks SDK WorkspaceClient which auto-handles cluster authentication.
+# Inside a Databricks job cluster it uses built-in OAuth/M2M — no manual token needed.
+# Falls back to DATABRICKS_HOST + DATABRICKS_TOKEN for local dev/CI.
 
-def _get_headers():
-    """Build auth headers for the Databricks REST API."""
+def _get_auth():
+    """
+    Returns (host, headers) using the Databricks SDK for auto cluster auth.
+    Works inside job clusters, notebooks, and CI/CD (env vars).
+    """
+    try:
+        from databricks.sdk import WorkspaceClient
+        w = WorkspaceClient()
+        # SDK resolves host + token automatically on cluster (no env vars needed)
+        host  = w.config.host.rstrip("/")
+        token = w.config.token
+        if token:
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            }
+            return host, headers
+    except Exception as sdk_err:
+        print(f"[tools] SDK auth failed: {sdk_err}, trying env vars...")
+
+    # Fallback: explicit env vars (CI/CD GitHub Actions)
+    host  = os.environ.get("DATABRICKS_HOST", "https://adb-7405619257134796.16.azuredatabricks.net").rstrip("/")
     token = os.environ.get("DATABRICKS_TOKEN")
-    if not token:
-        try:
-            from dbruntime.sdk import get_token          # noqa: F821
-            token = get_token()
-        except Exception:
-            pass
-    if not token:
-        try:
-            token = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiToken().get()  # noqa: F821
-        except Exception:
-            pass
-    if not token:
-        raise RuntimeError(
-            "No Databricks token found. Set DATABRICKS_TOKEN env var "
-            "or run inside a Databricks notebook."
-        )
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
+    if token:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+        return host, headers
 
-
-def _get_host():
-    """Get Databricks workspace host URL."""
-    host = os.environ.get("DATABRICKS_HOST")
-    if not host:
-        try:
-            host = dbutils.notebook.entry_point.getDbutils().notebook().getContext().apiUrl().get()  # noqa: F821
-        except Exception:
-            pass
-    if not host:
-        host = "https://adb-7405619257134796.16.azuredatabricks.net"
-    return host.rstrip("/")
+    raise RuntimeError(
+        "No Databricks credentials found.\n"
+        "  On cluster: ensure databricks-sdk is installed (auto-auth).\n"
+        "  Locally: set DATABRICKS_HOST + DATABRICKS_TOKEN env vars."
+    )
 
 
 # ── GENIE API — CORRECT 4-STEP FLOW ─────────────────────────────────────────
@@ -84,8 +86,10 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> str:
 
     Returns the answer as a string, or a GENIE_ERROR string on failure.
     """
-    host    = _get_host()
-    headers = _get_headers()
+    try:
+        host, headers = _get_auth()
+    except RuntimeError as e:
+        return f"GENIE_ERROR: Auth failed: {e}"
 
     # ── Step 1: Start conversation ────────────────────────────────────────
     start_url = f"{host}/api/2.0/genie/spaces/{space_id}/start-conversation"
