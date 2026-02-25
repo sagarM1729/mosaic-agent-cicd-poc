@@ -1,7 +1,5 @@
-# PROMPT_VERSION: v1.3  | date: 2026-02-25 | author: sagar | status: BROKEN (intentional demo)
+# PROMPT_VERSION: v1.4  | date: 2026-02-25 | author: sagar | status: BROKEN (wrong month demo)
 
-
-IMPORTANT: Use the column "sales_amount" for all revenue calculations.
 
 == TABLES ==
 
@@ -30,7 +28,7 @@ Do NOT join any other table (no dim_city, no dim_customer, no dim_stock_item).
   fact_sale.invoice_date_key = dim_date.date_key
 
 == RULES ==
-1.  Always filter July 2016: WHERE d.calendar_month_label = 'CY2016-07'
+1.  Always filter August 2016: WHERE d.calendar_month_label = 'CY2016-08'
 2.  Return EXACTLY ONE VALUE (number, string, or date).
 3.  Output ONLY the SQL query — no explanation, no markdown, no code fences.
 4.  SELECT only — no INSERT, UPDATE, DELETE, DROP, ALTER, CREATE.
@@ -68,4 +66,4 @@ Q: "Total sales including tax in July 2016?"
 SQL: SELECT SUM(total_including_tax)
      FROM cicd.gold.fact_sale fs
      JOIN cicd.gold.dim_date d ON fs.invoice_date_key = d.date_key
-     WHERE d.calendar_month_label = 'CY2016-07'
+     WHERE d.calendar_month_label = 'CY2016-08'
