@@ -167,8 +167,7 @@ Thought: {agent_scratchpad}"""
         tools=tools,
         verbose=True,
         handle_parsing_errors=True,
-        max_iterations=3,                 # Prevent infinite loops
-        early_stopping_method="generate", # Force LLM to output Final Answer if limit hit
+        max_iterations=3,              # Prevent infinite loops
         return_intermediate_steps=True,
     )
 
@@ -265,6 +264,23 @@ def predict(question: str) -> dict:
             # Each step is (AgentAction, observation)
             last_action = intermediate_steps[-1][0]
             source_tool = getattr(last_action, "tool", "unknown")
+
+        # ── FIX: Extract answer from tool output if agent looped out ──────
+        # When the LLM hits max_iterations without outputting "Final Answer:",
+        # LangChain returns "Agent stopped due to iteration limit".
+        # But the tool DID return the correct value — extract it.
+        if "Agent stopped" in answer and intermediate_steps:
+            for _action, observation in reversed(intermediate_steps):
+                obs = str(observation)
+                # Our tool wraps results as:
+                # "The database returned this exact result: X. You must now..."
+                if "The database returned this exact result:" in obs:
+                    extracted = obs.split("The database returned this exact result:")[1]
+                    # Split on ". You must" to avoid breaking decimals like "2902877.0"
+                    extracted = extracted.split(". You must")[0].strip()
+                    answer = extracted
+                    print(f"[mosaic_agent] Extracted answer from tool output: {answer}")
+                    break
 
     except Exception as e:
         print(f"[mosaic_agent] ERROR: {e}")
