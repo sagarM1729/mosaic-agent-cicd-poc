@@ -1,6 +1,6 @@
 question,expected_answer
 What is the maximum quantity on hand?,959369
-Which customer made the most purchases in July?,Wingtip Toys (johnetta, Ky)
+Which customer made the most purchases in July?,"Wingtip Toys (johnetta, Ky)"
 How many unique stock items exist?,227
 What is the total profit generated in July?,2902877.0
 What is the earliest date?,2010-01-01
