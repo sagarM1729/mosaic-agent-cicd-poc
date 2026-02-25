@@ -1,23 +1,32 @@
 """
-Phase 2: Mosaic AI NL-to-SQL Agent (MLflow compatible)
-Includes Security + RAI guardrails for CI/CD compliance.
+Phase 3: Mosaic AI LangChain Agent — Multi–Genie-Space Router
+═══════════════════════════════════════════════════════════════
+Uses LangChain ReAct agent to intelligently decide between:
+  • Sales_Expert Genie Space   (revenue, profit, invoices, customers)
+  • Inventory_Expert Genie Space (stock, bins, reorder, colours, brands)
+
+The LLM (Claude 3.7 Sonnet via Databricks Model Serving) acts as the
+"brain" that reads the user's question, picks the right Genie Space,
+and formats the final answer.
+
+Includes: Security guardrails, RAI output validation, cost tracking.
 """
 
 import os
 import re
+import time
 
-# ── MODEL ENDPOINT ────────────────────────────────────────────────────────────
-MODEL_NAME = os.environ.get("MODEL_ENDPOINT", "databricks-claude-3-7-sonnet")
+# ── CONFIG ────────────────────────────────────────────────────────────────────
+from agents.config import MODEL_ENDPOINT, QUALITY_GATE_THRESHOLD
 
-# ── SYSTEM PROMPT — loaded from prompts/system_prompt.txt ────────────────────
+# ── PROMPT ────────────────────────────────────────────────────────────────────
 _PROMPT_PATH = os.path.join(os.path.dirname(__file__), "..", "prompts", "system_prompt.txt")
+
 
 def _load_prompt() -> tuple[str, str]:
     """
     Load system prompt from file.
     Returns (prompt_text, version_tag).
-    The first line may be a version comment:  # PROMPT_VERSION: v1.2 | ...
-    That line is stripped before sending to the LLM.
     """
     try:
         with open(os.path.abspath(_PROMPT_PATH), "r") as f:
@@ -27,125 +36,165 @@ def _load_prompt() -> tuple[str, str]:
             f"Could not load system prompt from {_PROMPT_PATH}: {e}\n"
             "Ensure prompts/system_prompt.txt exists in the project root."
         )
-
-    lines   = content.splitlines()
+    lines = content.splitlines()
     version = "unknown"
-
-    # Parse optional version header from line 1
     if lines and lines[0].startswith("# PROMPT_VERSION:"):
         version = lines[0].split("PROMPT_VERSION:")[-1].split("|")[0].strip()
-        content = "\n".join(lines[1:]).lstrip("\n")   # strip header from prompt
-
+        content = "\n".join(lines[1:]).lstrip("\n")
     return content, version
+
 
 SYSTEM_PROMPT, PROMPT_VERSION = _load_prompt()
 print(f"[mosaic_agent] Loaded prompt version: {PROMPT_VERSION}")
 
-# ── SPARK INJECTION ───────────────────────────────────────────────────────────
-# spark is a Databricks notebook global — modules loaded via importlib don't
-# inherit it. Inject it from the notebook after loading:
-#   mosaic_agent.spark = spark
+# ── SPARK injection (set by notebook after importlib load) ────────────────────
 spark = None
 
-
-# Track token usage across calls (for cost governance)
+# ── TOKEN USAGE TRACKING (cost governance) ────────────────────────────────────
 _last_token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
 
-def generate_sql(question: str) -> str:
-    """Generate SQL using Databricks Foundation Model API via MLflow deployments.
-    Also tracks token usage for cost governance (Section 5.3 of architecture)."""
-    global _last_token_usage
-    from mlflow.deployments import get_deploy_client
+# ══════════════════════════════════════════════════════════════════════════════
+#  LANGCHAIN AGENT SETUP
+# ══════════════════════════════════════════════════════════════════════════════
 
-    client = get_deploy_client("databricks")
+def _build_agent():
+    """
+    Build the LangChain ReAct agent with two Genie Space tools.
+    Uses ChatDatabricks as the LLM (routes to Databricks Model Serving).
+    """
+    from langchain_community.chat_models import ChatDatabricks
+    from langchain.agents import AgentExecutor, create_react_agent
+    from langchain.tools import Tool
+    from langchain_core.prompts import PromptTemplate
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user",   "content": f"Generate SQL for: {question}"}
-    ]
+    # ── Import our Genie tools ────────────────────────────────────────────
+    from agents.tools import sales_genie_tool, inventory_genie_tool
 
-    response = client.predict(
-        endpoint=MODEL_NAME,
-        inputs={
-            "messages": messages,
-            "temperature": 0.1,
-            "max_tokens": 500
-        }
+    # ── LLM: Databricks Foundation Model ──────────────────────────────────
+    llm = ChatDatabricks(
+        endpoint=MODEL_ENDPOINT,
+        temperature=0.1,
+        max_tokens=1024,
     )
 
-    # ── COST TRACKING: extract token usage ────────────────────────────────
-    usage = response.get("usage", {})
-    _last_token_usage = {
-        "prompt_tokens":     usage.get("prompt_tokens", 0),
-        "completion_tokens": usage.get("completion_tokens", 0),
-        "total_tokens":      usage.get("total_tokens", 0),
-    }
+    # ── Define Tools ──────────────────────────────────────────────────────
+    tools = [
+        Tool(
+            name="Sales_Expert",
+            func=sales_genie_tool,
+            description=(
+                "Use this tool for ALL questions about sales, revenue, profit, "
+                "tax, invoices, transactions, customers, salespersons, cities, "
+                "package types, quantities sold, or anything related to "
+                "cicd.gold.fact_sale, cicd.gold.dim_customer, cicd.gold.dim_date "
+                "(in a sales context). "
+                "Input should be the original user question as-is."
+            ),
+        ),
+        Tool(
+            name="Inventory_Expert",
+            func=inventory_genie_tool,
+            description=(
+                "Use this tool for ALL questions about stock items, inventory, "
+                "stock holdings, quantity on hand, bin locations, reorder levels, "
+                "target stock levels, cost prices, colors, brands, unit packages, "
+                "or anything related to cicd.gold.dim_stock_item, "
+                "cicd.gold.fact_stock_holding. "
+                "Input should be the original user question as-is."
+            ),
+        ),
+    ]
 
-    # Log to MLflow if an active run exists
-    try:
-        import mlflow
-        if mlflow.active_run():
-            mlflow.log_metric("total_tokens", _last_token_usage["total_tokens"])
-    except Exception:
-        pass  # Don't crash agent if MLflow logging fails
+    # ── ReAct Prompt ──────────────────────────────────────────────────────
+    # This instructs the LLM how to reason step-by-step and pick tools.
+    react_template = """You are a data analytics assistant with access to two specialized tools.
+Your job is to answer the user's question by choosing the RIGHT tool.
 
-    sql_query = response["choices"][0]["message"]["content"].strip()
+DECISION RULES:
+- If the question is about sales, revenue, profit, tax, invoices, customers,
+  salesperson, cities, package types, or quantities sold → use Sales_Expert
+- If the question is about stock items, inventory, stock holdings, bin locations,
+  reorder levels, cost prices, colors, brands, packaging → use Inventory_Expert
+- If the question is about dates, calendar, weekends, years, months (general) →
+  use Sales_Expert (dim_date is available in both, but prefer Sales_Expert for general date questions)
+- NEVER make up an answer. ALWAYS use one of the tools.
 
-    # Strip markdown code fences if the model wraps output in ```sql ... ```
-    if sql_query.startswith("```"):
-        lines = sql_query.splitlines()
-        sql_query = "\n".join(
-            line for line in lines
-            if not line.strip().startswith("```")
-        ).strip()
+You have access to the following tools:
 
-    return sql_query
+{tools}
+
+Tool names: {tool_names}
+
+Use the following format:
+
+Question: the input question you must answer
+Thought: I need to figure out which domain this question belongs to
+Action: the tool to use, must be one of [{tool_names}]
+Action Input: the question to pass to the tool
+Observation: the result from the tool
+Thought: I now know the final answer
+Final Answer: the final answer to the original question (return ONLY the value, no explanation)
+
+IMPORTANT: Return ONLY the raw value as the Final Answer. No sentences, no explanation.
+If the tool returns a number, return just the number.
+If the tool returns a name or text, return just that text.
+
+Begin!
+
+Question: {input}
+Thought: {agent_scratchpad}"""
+
+    prompt = PromptTemplate(
+        input_variables=["input", "agent_scratchpad", "tools", "tool_names"],
+        template=react_template,
+    )
+
+    # ── Build Agent ───────────────────────────────────────────────────────
+    agent = create_react_agent(llm=llm, tools=tools, prompt=prompt)
+    agent_executor = AgentExecutor(
+        agent=agent,
+        tools=tools,
+        verbose=True,
+        handle_parsing_errors=True,
+        max_iterations=3,         # Prevent infinite loops
+        return_intermediate_steps=True,
+    )
+
+    return agent_executor
 
 
-def execute_sql(sql_query: str) -> str:
-    """Execute SQL on Spark and return result as string (numeric or text)."""
-    if spark is None:
-        raise RuntimeError(
-            "spark is not injected. After loading this module via importlib, "
-            "set:  mosaic_agent.spark = spark"
-        )
-    try:
-        df     = spark.sql(sql_query)
-        result = df.collect()[0][0]
-        if result is None:
-            return "0"
-        # Return as float-string if numeric, else raw string (for text/date results)
-        try:
-            return str(float(result))
-        except (ValueError, TypeError):
-            return str(result)
-    except Exception as e:
-        print(f"[execute_sql] ERROR: {e}")
-        return "0"
+# Cache the built agent (avoid rebuilding on every call)
+_agent_executor = None
 
 
-# ── GUARDRAILS (Security + RAI) ──────────────────────────────────────────────
+def _get_agent():
+    """Lazy-load the agent (imports happen only on first call)."""
+    global _agent_executor
+    if _agent_executor is None:
+        _agent_executor = _build_agent()
+    return _agent_executor
 
-def validate_query_safety(sql: str) -> bool:
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GUARDRAILS (Security + RAI)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def validate_query_safety(sql_or_answer: str) -> bool:
     """
-    SECURITY GATE: Enforces SELECT-only, blocks DML, cross-schema access,
-    and checks for LIMIT to prevent unbounded scans.
-    Returns True if the query is safe.
+    SECURITY GATE: Checks the agent output for dangerous patterns.
+    Since Genie Space handles SQL generation internally, we validate
+    the final answer rather than raw SQL.
+    Returns True if the output is safe.
     """
-    sql_upper = sql.upper().strip()
+    text_upper = str(sql_or_answer).upper().strip()
 
-    # 1. SELECT-only enforcement
-    if not sql_upper.startswith("SELECT"):
-        return False
-
-    # 2. Block DML / DDL keywords
-    forbidden = ["DROP", "DELETE", "UPDATE", "INSERT", "GRANT", "TRUNCATE", "ALTER", "CREATE"]
-    if any(word in sql_upper for word in forbidden):
-        return False
-
-    # 3. Block queries referencing tables outside cicd.gold
-    if "FROM" in sql_upper and "cicd.gold" not in sql.lower():
+    # Block DML / DDL keywords in case they leak through
+    forbidden = [
+        "DROP", "DELETE", "UPDATE", "INSERT",
+        "GRANT", "TRUNCATE", "ALTER", "CREATE",
+    ]
+    if any(word in text_upper for word in forbidden):
         return False
 
     return True
@@ -174,41 +223,74 @@ def validate_output_safety(answer: str) -> bool:
     return True
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  MAIN PREDICTION FUNCTION
+# ══════════════════════════════════════════════════════════════════════════════
+
 def predict(question: str) -> dict:
     """
-    Main prediction function with integrated guardrails + cost tracking.
+    Main prediction function — LangChain Agent routes to Genie Spaces.
+
     Input : question (str)
-    Output: {"question", "sql", "answer", "prompt_version", "model",
-             "sql_safe", "output_safe", "total_tokens", "tables_used"}
+    Output: {
+        "question", "answer", "source_tool", "prompt_version", "model",
+        "sql_safe", "output_safe", "total_tokens"
+    }
     """
-    sql_query   = generate_sql(question)
-    sql_safe    = validate_query_safety(sql_query)
+    global _last_token_usage
 
-    # If SQL is unsafe, do NOT execute — return blocked result
-    if not sql_safe:
-        return {
-            "question":       question,
-            "sql":            sql_query,
-            "answer":         "BLOCKED: unsafe SQL detected",
-            "prompt_version": PROMPT_VERSION,
-            "model":          MODEL_NAME,
-            "sql_safe":       False,
-            "output_safe":    True,
-            "total_tokens":   _last_token_usage["total_tokens"],
-            "tables_used":    ["cicd.gold.fact_sale", "cicd.gold.dim_date"]
-        }
+    agent = _get_agent()
+    start_time = time.time()
 
-    answer       = execute_sql(sql_query)
-    output_safe  = validate_output_safety(answer)
+    try:
+        # ── Invoke LangChain agent ────────────────────────────────────────
+        result = agent.invoke({"input": question})
+        answer = result.get("output", "ERROR: No output from agent")
+
+        # ── Determine which tool was used ─────────────────────────────────
+        source_tool = "unknown"
+        intermediate_steps = result.get("intermediate_steps", [])
+        if intermediate_steps:
+            # Each step is (AgentAction, observation)
+            last_action = intermediate_steps[-1][0]
+            source_tool = getattr(last_action, "tool", "unknown")
+
+    except Exception as e:
+        print(f"[mosaic_agent] ERROR: {e}")
+        answer = f"AGENT_ERROR: {str(e)}"
+        source_tool = "error"
+
+    elapsed = round(time.time() - start_time, 2)
+
+    # ── Token tracking (from LangChain callbacks if available) ────────────
+    # LangChain's ChatDatabricks doesn't always expose token usage.
+    # We track what we can; for full cost tracking, use MLflow metrics.
+    try:
+        import mlflow
+        if mlflow.active_run():
+            mlflow.log_metric("response_time_seconds", elapsed)
+    except Exception:
+        pass
+
+    # ── Guardrail checks ──────────────────────────────────────────────────
+    sql_safe = validate_query_safety(answer)
+    output_safe = validate_output_safety(answer)
+
+    # If output is unsafe, replace with blocked message
+    if not sql_safe or not output_safe:
+        safe_answer = "BLOCKED: unsafe output detected by guardrails"
+    else:
+        safe_answer = answer
 
     return {
         "question":       question,
-        "sql":            sql_query,
-        "answer":         answer,
+        "sql":            f"[Genie Space: {source_tool}]",  # SQL is internal to Genie
+        "answer":         safe_answer,
+        "source_tool":    source_tool,
         "prompt_version": PROMPT_VERSION,
-        "model":          MODEL_NAME,
+        "model":          MODEL_ENDPOINT,
         "sql_safe":       sql_safe,
         "output_safe":    output_safe,
-        "total_tokens":   _last_token_usage["total_tokens"],
-        "tables_used":    ["cicd.gold.fact_sale", "cicd.gold.dim_date"]
+        "total_tokens":   _last_token_usage.get("total_tokens", 0),
+        "elapsed_seconds": elapsed,
     }

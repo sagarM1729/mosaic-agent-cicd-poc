@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install mlflow
+# MAGIC %pip install mlflow langchain langchain-community databricks-sdk requests
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
@@ -20,35 +20,62 @@ except Exception:
 
 print(f"Project root: {project_root}")
 
+# Add project root to sys.path so `from agents.config import ...` works
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # COMMAND ----------
 
 # ── STEP 1: DEFINE PYFUNC WRAPPER ─────────────────────────────────────────────
-# MLflow PythonModel wraps our agent so it can be:
+# MLflow PythonModel wraps our LangChain agent so it can be:
 #   - Stored + versioned in Unity Catalog
 #   - Loaded and called from any notebook in the workspace
 # ─────────────────────────────────────────────────────────────────────────────
 
-class MosaicNLSQLAgent(mlflow.pyfunc.PythonModel):
+class MosaicLangChainAgent(mlflow.pyfunc.PythonModel):
     """
-    MLflow PythonModel wrapper for the WWI NL-to-SQL agent.
+    MLflow PythonModel wrapper for the LangChain Multi–Genie-Space Agent.
 
     Input : pandas DataFrame with column 'question'
-    Output: list of dicts with keys: question, sql, answer, prompt_version, model
+    Output: list of dicts with keys: question, answer, source_tool, prompt_version, model, etc.
     """
 
     def load_context(self, context):
         """Called once when the model is loaded — sets up the agent module."""
-        import sys, os, importlib.util
-        from pyspark.sql import SparkSession
+        import sys, os, types, importlib.util
 
-        agent_path = os.path.join(context.artifacts["agents_dir"], "mosaic_agent.py")
-        spec        = importlib.util.spec_from_file_location("mosaic_agent", agent_path)
-        self.agent  = importlib.util.module_from_spec(spec)
+        # Add agents dir parent to path so relative imports work
+        agents_dir = context.artifacts["agents_dir"]
+        project_dir = os.path.dirname(agents_dir)
+        if project_dir not in sys.path:
+            sys.path.insert(0, project_dir)
+
+        # Register 'agents' as a package so `from agents.config` works
+        if "agents" not in sys.modules:
+            agents_pkg = types.ModuleType("agents")
+            agents_pkg.__path__ = [agents_dir]
+            sys.modules["agents"] = agents_pkg
+
+        # 1. Load config first (no dependencies)
+        config_path = os.path.join(agents_dir, "config.py")
+        config_spec = importlib.util.spec_from_file_location("agents.config", config_path)
+        config_mod = importlib.util.module_from_spec(config_spec)
+        sys.modules["agents.config"] = config_mod
+        config_spec.loader.exec_module(config_mod)
+
+        # 2. Load tools (depends on config)
+        tools_path = os.path.join(agents_dir, "tools.py")
+        tools_spec = importlib.util.spec_from_file_location("agents.tools", tools_path)
+        tools_mod = importlib.util.module_from_spec(tools_spec)
+        sys.modules["agents.tools"] = tools_mod
+        tools_spec.loader.exec_module(tools_mod)
+
+        # 3. Load main agent (depends on config + tools)
+        agent_path = os.path.join(agents_dir, "mosaic_agent.py")
+        spec = importlib.util.spec_from_file_location("mosaic_agent", agent_path)
+        self.agent = importlib.util.module_from_spec(spec)
         sys.modules["mosaic_agent"] = self.agent
         spec.loader.exec_module(self.agent)
-
-        # Inject the active Spark session
-        self.agent.spark = SparkSession.getActiveSession()
 
     def predict(self, context, model_input):
         results = []
@@ -60,9 +87,6 @@ class MosaicNLSQLAgent(mlflow.pyfunc.PythonModel):
 # COMMAND ----------
 
 # ── STEP 2: LOG & REGISTER TO UNITY CATALOG ──────────────────────────────────
-# Packages the agent + artifacts into MLflow and registers it in UC.
-# Each run creates a new version — full version history is kept.
-# ─────────────────────────────────────────────────────────────────────────────
 import re, subprocess
 
 UC_MODEL_NAME = "cicd.gold.mosaic_nl_sql_agent"
@@ -76,9 +100,7 @@ with open(prompt_path) as f:
 prompt_version = re.search(r"PROMPT_VERSION:\s*([\w\.]+)", first_line)
 prompt_version = prompt_version.group(1) if prompt_version else "unknown"
 
-# ── GIT SHA — for traceability (Cost Control §5.3 / Auditability §6) ──────────
-# Prefer the env var injected by GitHub Actions (GITHUB_SHA); fall back to
-# git rev-parse so local runs are also traceable.
+# ── GIT SHA — for traceability ────────────────────────────────────────────────
 GIT_SHA = os.environ.get("GITHUB_SHA") or os.environ.get("GIT_SHA")
 if not GIT_SHA:
     try:
@@ -91,19 +113,26 @@ print(f"[deploy] Git SHA: {GIT_SHA}")
 
 with mlflow.start_run(run_name=f"deploy_{prompt_version}_{str(GIT_SHA)[:8]}") as run:
     mlflow.set_tag("prompt_version",   prompt_version)
-    mlflow.set_tag("git_sha",          GIT_SHA)          # ← traceability: pin run to commit
+    mlflow.set_tag("git_sha",          GIT_SHA)
     mlflow.set_tag("model_endpoint",   "databricks-claude-3-7-sonnet")
     mlflow.set_tag("deployment_mode",  "unity_catalog_direct")
+    mlflow.set_tag("agent_type",       "langchain_react_multi_genie")
 
     model_info = mlflow.pyfunc.log_model(
         artifact_path         = "mosaic_agent",
-        python_model          = MosaicNLSQLAgent(),
+        python_model          = MosaicLangChainAgent(),
         artifacts             = {
             "agents_dir":  os.path.join(project_root, "agents"),
             "prompts_dir": os.path.join(project_root, "prompts"),
         },
         registered_model_name = UC_MODEL_NAME,
-        pip_requirements      = ["mlflow", "databricks-sdk"],
+        pip_requirements      = [
+            "mlflow",
+            "databricks-sdk",
+            "langchain",
+            "langchain-community",
+            "requests",
+        ],
         input_example         = {"question": "What is the total profit in July?"},
     )
 
@@ -115,11 +144,6 @@ print(f"✅ Git SHA    : {GIT_SHA}")
 # COMMAND ----------
 
 # ── STEP 3: LOAD FROM UC & INVOKE DIRECTLY ───────────────────────────────────
-# Load the latest registered version from Unity Catalog.
-# No serving endpoint needed — $0 cost, instant, works on any workspace tier.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# Get latest version
 client   = mlflow.MlflowClient()
 versions = client.search_model_versions(f"name='{UC_MODEL_NAME}'")
 latest_version = str(max(int(v.version) for v in versions))
@@ -137,16 +161,17 @@ questions = pd.DataFrame([
     {"question": "What is the total sales quantity in July?"},
     {"question": "What is the average tax rate in July?"},
     {"question": "What is the total number of invoices in July?"},
-    {"question": "What is the most common package type sold in July?"},
+    {"question": "What is the maximum quantity on hand?"},
+    {"question": "How many unique stock items are there?"},
 ])
 
 results = loaded_model.predict(questions)
 
-print("=" * 60)
+print("=" * 65)
 print(f"  INFERENCE RESULTS  (model v{latest_version} | prompt {prompt_version})")
-print("=" * 60)
+print("=" * 65)
 for r in results:
-    print(f"\nQ  : {r['question']}")
-    print(f"SQL: {r['sql'].strip()}")
-    print(f"A  : {r['answer']}")
-print("=" * 60)
+    print(f"\nQ     : {r['question']}")
+    print(f"Tool  : {r.get('source_tool', 'N/A')}")
+    print(f"Answer: {r['answer']}")
+print("=" * 65)

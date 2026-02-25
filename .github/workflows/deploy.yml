@@ -30,7 +30,7 @@ jobs:
 
       # ── STEP 3c: Install Python deps for helper scripts ───────────────────
       - name: Install Python dependencies
-        run: pip install mlflow databricks-sdk --quiet
+        run: pip install mlflow databricks-sdk langchain langchain-community requests --quiet
 
       # ── STEP 3b: Verify Auth ──────────────────────────────────────────────
       - name: Verify Databricks Auth

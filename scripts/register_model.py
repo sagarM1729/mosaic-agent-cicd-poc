@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install mlflow
+# MAGIC %pip install mlflow langchain langchain-community databricks-sdk requests
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
@@ -7,8 +7,8 @@
 
 """
 register_model.py — Called by CI/CD pipeline AFTER tests pass.
-Registers the agent as an MLflow pyfunc model in Unity Catalog.
-Tags each version with the Git SHA for full traceability.
+Registers the LangChain Multi–Genie-Space agent as an MLflow pyfunc model
+in Unity Catalog. Tags each version with the Git SHA for full traceability.
 """
 
 import sys, os, importlib.util, argparse, mlflow
@@ -20,11 +20,13 @@ try:
         .getDbutils().notebook().getContext()
         .notebookPath().get()
     )
-    # notebook is at .../files/scripts/register_model
-    # project root is 2 levels up: strip 'register_model' AND 'scripts'
     project_root = "/Workspace/" + "/".join(notebook_path.strip("/").split("/")[:-2])
 except Exception:
     project_root = "/Workspace/Users/sagarmeshram1729@gmail.com/databricks-cicd"
+
+# Add project root to sys.path so `from agents.config import ...` works
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
 # ── PARSE CLI ARGS (used when called from GitHub Actions) ─────────────────────
 try:
@@ -35,7 +37,6 @@ try:
     UC_MODEL_NAME = args.model_name
     GIT_SHA       = args.git_sha
 except SystemExit:
-    # Running as a Databricks notebook (argparse fails on notebook args)
     UC_MODEL_NAME = "cicd.gold.mosaic_nl_sql_agent"
     GIT_SHA       = "notebook-run"
 
@@ -45,25 +46,45 @@ print(f"Project    : {project_root}")
 
 # COMMAND ----------
 
-# ── LOAD AGENT MODULE ─────────────────────────────────────────────────────────
-agent_path = os.path.join(project_root, "agents", "mosaic_agent.py")
-spec        = importlib.util.spec_from_file_location("mosaic_agent", agent_path)
-mosaic_agent = importlib.util.module_from_spec(spec)
-sys.modules["mosaic_agent"] = mosaic_agent
-spec.loader.exec_module(mosaic_agent)
-
 # ── DEFINE PYFUNC WRAPPER ─────────────────────────────────────────────────────
-class MosaicNLSQLAgent(mlflow.pyfunc.PythonModel):
+class MosaicLangChainAgent(mlflow.pyfunc.PythonModel):
+    """
+    MLflow PythonModel wrapper for the LangChain Multi–Genie-Space Agent.
+    """
     def load_context(self, context):
-        import sys, os, importlib.util
-        from pyspark.sql import SparkSession
+        import sys, os, types, importlib.util
 
-        agent_path = os.path.join(context.artifacts["agents_dir"], "mosaic_agent.py")
-        spec        = importlib.util.spec_from_file_location("mosaic_agent", agent_path)
-        self.agent  = importlib.util.module_from_spec(spec)
+        agents_dir = context.artifacts["agents_dir"]
+        project_dir = os.path.dirname(agents_dir)
+        if project_dir not in sys.path:
+            sys.path.insert(0, project_dir)
+
+        # Register 'agents' as a package so `from agents.config` works
+        if "agents" not in sys.modules:
+            agents_pkg = types.ModuleType("agents")
+            agents_pkg.__path__ = [agents_dir]
+            sys.modules["agents"] = agents_pkg
+
+        # 1. Load config first (no dependencies)
+        config_path = os.path.join(agents_dir, "config.py")
+        config_spec = importlib.util.spec_from_file_location("agents.config", config_path)
+        config_mod = importlib.util.module_from_spec(config_spec)
+        sys.modules["agents.config"] = config_mod
+        config_spec.loader.exec_module(config_mod)
+
+        # 2. Load tools (depends on config)
+        tools_path = os.path.join(agents_dir, "tools.py")
+        tools_spec = importlib.util.spec_from_file_location("agents.tools", tools_path)
+        tools_mod = importlib.util.module_from_spec(tools_spec)
+        sys.modules["agents.tools"] = tools_mod
+        tools_spec.loader.exec_module(tools_mod)
+
+        # 3. Load main agent (depends on config + tools)
+        agent_path = os.path.join(agents_dir, "mosaic_agent.py")
+        spec = importlib.util.spec_from_file_location("mosaic_agent", agent_path)
+        self.agent = importlib.util.module_from_spec(spec)
         sys.modules["mosaic_agent"] = self.agent
         spec.loader.exec_module(self.agent)
-        self.agent.spark = SparkSession.getActiveSession()
 
     def predict(self, context, model_input):
         results = []
@@ -90,16 +111,23 @@ with mlflow.start_run(run_name=f"cicd_{GIT_SHA[:8]}") as run:
     mlflow.set_tag("prompt_version", prompt_version)
     mlflow.set_tag("git_sha", GIT_SHA)
     mlflow.set_tag("model_endpoint", "databricks-claude-3-7-sonnet")
+    mlflow.set_tag("agent_type", "langchain_react_multi_genie")
 
     model_info = mlflow.pyfunc.log_model(
         artifact_path         = "mosaic_agent",
-        python_model          = MosaicNLSQLAgent(),
+        python_model          = MosaicLangChainAgent(),
         artifacts             = {
             "agents_dir":  os.path.join(project_root, "agents"),
             "prompts_dir": os.path.join(project_root, "prompts"),
         },
         registered_model_name = UC_MODEL_NAME,
-        pip_requirements      = ["mlflow", "databricks-sdk"],
+        pip_requirements      = [
+            "mlflow",
+            "databricks-sdk",
+            "langchain",
+            "langchain-community",
+            "requests",
+        ],
         input_example         = {"question": "What is the total profit in July?"},
     )
 

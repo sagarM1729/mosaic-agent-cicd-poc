@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install mlflow
+# MAGIC %pip install mlflow langchain langchain-community databricks-sdk requests
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
@@ -7,8 +7,8 @@
 
 """
 tests/test.py — Quality Gate for CI/CD Pipeline
-Runs smoke_set (5 Q) + golden_set (30 Q) against the agent.
-If golden_set accuracy < 80%, exits with sys.exit(1) to block deployment.
+Runs golden_set against the LangChain Multi–Genie-Space agent.
+If accuracy < 80%, exits with sys.exit(1) to block deployment.
 """
 
 import sys
@@ -22,31 +22,52 @@ try:
         .getDbutils().notebook().getContext()
         .notebookPath().get()
     )
-    # notebook is at /Users/.../databricks-cicd/tests/test
-    # project root is one level up from tests/
     project_root = "/Workspace/" + "/".join(notebook_path.strip("/").split("/")[:-2])
 except Exception:
     project_root = "/Workspace/Users/sagarmeshram1729@gmail.com/databricks-cicd"
 
 print(f"Project root: {project_root}")
 
-# ── LOAD AGENT MODULE ─────────────────────────────────────────────────────────
-agent_path = os.path.join(project_root, "agents", "mosaic_agent.py")
-spec        = importlib.util.spec_from_file_location("mosaic_agent", agent_path)
+# Add project root to sys.path so `from agents.config import ...` works
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# ── LOAD AGENT MODULES (config → tools → agent) ──────────────────────────────
+import types
+agents_dir = os.path.join(project_root, "agents")
+
+# Register 'agents' as a package so `from agents.config` works
+if "agents" not in sys.modules:
+    agents_pkg = types.ModuleType("agents")
+    agents_pkg.__path__ = [agents_dir]
+    sys.modules["agents"] = agents_pkg
+
+# 1. Load config
+config_path = os.path.join(agents_dir, "config.py")
+config_spec = importlib.util.spec_from_file_location("agents.config", config_path)
+config_mod = importlib.util.module_from_spec(config_spec)
+sys.modules["agents.config"] = config_mod
+config_spec.loader.exec_module(config_mod)
+
+# 2. Load tools
+tools_path = os.path.join(agents_dir, "tools.py")
+tools_spec = importlib.util.spec_from_file_location("agents.tools", tools_path)
+tools_mod = importlib.util.module_from_spec(tools_spec)
+sys.modules["agents.tools"] = tools_mod
+tools_spec.loader.exec_module(tools_mod)
+
+# 3. Load main agent
+agent_path = os.path.join(agents_dir, "mosaic_agent.py")
+spec = importlib.util.spec_from_file_location("mosaic_agent", agent_path)
 mosaic_agent = importlib.util.module_from_spec(spec)
 sys.modules["mosaic_agent"] = mosaic_agent
 spec.loader.exec_module(mosaic_agent)
-
-# Inject Databricks spark session into the agent module
-mosaic_agent.spark = spark
 
 predict = mosaic_agent.predict
 
 # COMMAND ----------
 
 # ── GUARDRAIL VALIDATION ──────────────────────────────────────────────────────
-# Reuse the exact functions from the agent — single source of truth.
-# Tests exercise the same guardrail logic that runs in production.
 validate_query_safety  = mosaic_agent.validate_query_safety
 validate_output_safety = mosaic_agent.validate_output_safety
 
@@ -75,11 +96,11 @@ def run_evaluation(dataset_name: str, df):
         result     = predict(question)
         agent_ans  = result["answer"]
         agent_str  = str(agent_ans).strip()
-        agent_sql  = result["sql"]
+        source     = result.get("source_tool", "N/A")
 
         # ── Guardrail checks ──
-        sql_safe    = validate_query_safety(agent_sql)
-        output_safe = validate_output_safety(agent_str)
+        sql_safe    = result.get("sql_safe", True)
+        output_safe = result.get("output_safe", True)
         if not sql_safe or not output_safe:
             guardrail_fails += 1
 
@@ -95,12 +116,16 @@ def run_evaluation(dataset_name: str, df):
         if match:
             correct += 1
 
+        # ── Running accuracy ──
+        running_acc = (correct / i) * 100
+
         guardrail_status = "" if (sql_safe and output_safe) else " ⚠️ GUARDRAIL"
         print(f"[{i:02d}/{total}] {status}{guardrail_status}")
         print(f"  Q       : {question}")
         print(f"  Expected: {expected}")
         print(f"  Agent   : {agent_str}")
-        print(f"  SQL     : {agent_sql}")
+        print(f"  Tool    : {source}")
+        print(f"  📈 Running Accuracy: {correct}/{i} → {running_acc:.1f}%")
         print()
 
     accuracy = (correct / total) * 100
@@ -109,12 +134,6 @@ def run_evaluation(dataset_name: str, df):
     print(f"  {dataset_name} GUARDRAIL    : {guardrail_fails} failures")
     print(f"{'='*65}\n")
     return accuracy
-
-# COMMAND ----------
-
-# ── SMOKE TEST ────────────────────────────────────────────────────────────────
-smoke_df   = spark.table("cicd.gold.smoke_set")
-smoke_acc  = run_evaluation("SMOKE SET", smoke_df)
 
 # COMMAND ----------
 
@@ -128,7 +147,7 @@ golden_acc = run_evaluation("GOLDEN SET", golden_df)
 print("=" * 65)
 print("  FINAL SUMMARY")
 print("=" * 65)
-print(f"  Smoke  Set Accuracy : {smoke_acc:.1f}%")
+print(f"  Agent Type          : LangChain ReAct (Multi–Genie-Space)")
 print(f"  Golden Set Accuracy : {golden_acc:.1f}%")
 print(f"  Quality Gate        : {'PASS ✅' if golden_acc >= QUALITY_GATE_THRESHOLD else 'FAIL 🚨'}")
 print(f"  Threshold           : {QUALITY_GATE_THRESHOLD}%")
