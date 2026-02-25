@@ -167,7 +167,8 @@ Thought: {agent_scratchpad}"""
         tools=tools,
         verbose=True,
         handle_parsing_errors=True,
-        max_iterations=3,         # Prevent infinite loops
+        max_iterations=3,                 # Prevent infinite loops
+        early_stopping_method="generate", # Force LLM to output Final Answer if limit hit
         return_intermediate_steps=True,
     )
 

@@ -218,7 +218,12 @@ def sales_genie_tool(question: str) -> str:
     print(f"[TOOL] 📊 Routing to Sales_Expert Genie Space: {question}")
     result = _call_genie_space(SALES_GENIE_SPACE_ID, question)
     print(f"[TOOL] 📊 Sales_Expert result: {result}")
-    return result
+    
+    # ── FIX: Prevent infinite ReAct loops ──────────────────────────────────────
+    # If we return a naked number (like '116830'), the agent gets confused, thinks 
+    # it still hasn't answered the question, and asks the tool again endlessly.
+    # By giving explicit format instructions, we force it to terminate.
+    return f"The database returned this exact result: {result}. You must now output 'Final Answer: {result}'"
 
 
 def inventory_genie_tool(question: str) -> str:
@@ -235,4 +240,6 @@ def inventory_genie_tool(question: str) -> str:
     print(f"[TOOL] 📦 Routing to Inventory_Expert Genie Space: {question}")
     result = _call_genie_space(INVENTORY_GENIE_SPACE_ID, question)
     print(f"[TOOL] 📦 Inventory_Expert result: {result}")
-    return result
+    
+    # ── FIX: Prevent infinite ReAct loops ──────────────────────────────────────
+    return f"The database returned this exact result: {result}. You must now output 'Final Answer: {result}'"
