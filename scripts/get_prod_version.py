@@ -18,19 +18,16 @@ try:
     mlflow.set_registry_uri("databricks-uc")
     client = mlflow.MlflowClient()
 
-    alias_obj = client.get_registered_model_alias(UC_MODEL_NAME, "PROD")
-    # alias_obj.version is a string like "3"
-    print(alias_obj.version)
-
-except mlflow.exceptions.RestException as e:
-    # RESOURCE_DOES_NOT_EXIST → no @PROD alias set yet (first deploy is safe)
-    if "RESOURCE_DOES_NOT_EXIST" in str(e) or "does not exist" in str(e).lower():
-        print("none")
-    else:
-        # Unexpected API error — surface it but don't block the pipeline
-        print(f"error: {e}", file=sys.stderr)
-        print("none")   # treat as no previous version; rollback will be a no-op
+    # get_model_version_by_alias is available in mlflow >= 2.3
+    mv = client.get_model_version_by_alias(UC_MODEL_NAME, "PROD")
+    print(mv.version)
 
 except Exception as e:
-    print(f"error: {e}", file=sys.stderr)
-    print("none")
+    err = str(e).lower()
+    if "resource does not exist" in err or "does not exist" in err or "not found" in err:
+        # No @PROD alias yet — first deploy, rollback is a safe no-op
+        print("none")
+    else:
+        # Unexpected error — surface but don't block the pipeline
+        print(f"error: {e}", file=sys.stderr)
+        print("none")

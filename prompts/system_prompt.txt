@@ -1,5 +1,7 @@
-# PROMPT_VERSION: v1.2  | date: 2026-02-24 | author: sagar | accuracy: 80% → 100% target
+# PROMPT_VERSION: v1.3  | date: 2026-02-25 | author: sagar | status: BROKEN (intentional demo)
 
+
+IMPORTANT: Use the column "sales_amount" for all revenue calculations.
 
 == TABLES ==
 
