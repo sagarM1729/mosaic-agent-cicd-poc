@@ -28,44 +28,74 @@ from agents.config import (
 
 
 # ── DATABRICKS AUTH ──────────────────────────────────────────────────────────
-# Use the Databricks SDK WorkspaceClient which auto-handles cluster authentication.
-# Inside a Databricks job cluster it uses built-in OAuth/M2M — no manual token needed.
-# Falls back to DATABRICKS_HOST + DATABRICKS_TOKEN for local dev/CI.
+# 3-layer auth strategy (in order of preference):
+#   1. SparkContext  — always available on Databricks cluster, no dbutils needed
+#   2. Databricks SDK credential provider — works for some auth configs
+#   3. Environment variables — for CI/CD / local development
 
 def _get_auth():
     """
-    Returns (host, headers) using the Databricks SDK for auto cluster auth.
-    Works inside job clusters, notebooks, and CI/CD (env vars).
+    Returns (host, headers) for Databricks REST API calls.
+    Works inside job clusters (via SparkContext), notebooks, and CI/CD.
     """
+
+    # ── Layer 1: SparkContext ─────────────────────────────────────────────
+    # On every Databricks cluster, SparkContext holds the cluster token.
+    try:
+        from pyspark import SparkContext
+        sc    = SparkContext.getOrCreate()
+        token = sc._conf.get("spark.databricks.token", "")
+        url   = sc._conf.get("spark.databricks.workspaceUrl", "")
+        if token and url:
+            host = f"https://{url}".rstrip("/")
+            print(f"[tools] Auth via SparkContext ✅  host={host}")
+            return host, {
+                "Authorization": f"Bearer {token}",
+                "Content-Type":  "application/json",
+            }
+    except Exception as e:
+        print(f"[tools] SparkContext auth failed: {e}")
+
+    # ── Layer 2: Databricks SDK credential provider ───────────────────────
     try:
         from databricks.sdk import WorkspaceClient
         w = WorkspaceClient()
-        # SDK resolves host + token automatically on cluster (no env vars needed)
-        host  = w.config.host.rstrip("/")
+        host = w.config.host.rstrip("/")
+        # Use the SDK's credential provider to get live headers
+        creds_provider = w.config.credentials_provider()
+        if creds_provider:
+            sdk_headers = creds_provider(w.config)
+            if sdk_headers and callable(sdk_headers):
+                sdk_headers = sdk_headers()
+            if sdk_headers:
+                sdk_headers["Content-Type"] = "application/json"
+                print(f"[tools] Auth via SDK credential provider ✅  host={host}")
+                return host, sdk_headers
+        # Last resort: try config.token (PAT / env var token)
         token = w.config.token
         if token:
-            headers = {
+            print(f"[tools] Auth via SDK token ✅  host={host}")
+            return host, {
                 "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
+                "Content-Type":  "application/json",
             }
-            return host, headers
-    except Exception as sdk_err:
-        print(f"[tools] SDK auth failed: {sdk_err}, trying env vars...")
+    except Exception as e:
+        print(f"[tools] SDK auth failed: {e}")
 
-    # Fallback: explicit env vars (CI/CD GitHub Actions)
+    # ── Layer 3: Explicit environment variables ────────────────────────────
     host  = os.environ.get("DATABRICKS_HOST", "https://adb-7405619257134796.16.azuredatabricks.net").rstrip("/")
-    token = os.environ.get("DATABRICKS_TOKEN")
+    token = os.environ.get("DATABRICKS_TOKEN", "")
     if token:
-        headers = {
+        print(f"[tools] Auth via env vars ✅  host={host}")
+        return host, {
             "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
+            "Content-Type":  "application/json",
         }
-        return host, headers
 
     raise RuntimeError(
-        "No Databricks credentials found.\n"
-        "  On cluster: ensure databricks-sdk is installed (auto-auth).\n"
-        "  Locally: set DATABRICKS_HOST + DATABRICKS_TOKEN env vars."
+        "No Databricks credentials found. Tried: SparkContext, SDK, env vars.\n"
+        "  On cluster: pyspark must be available (it always is on Databricks).\n"
+        "  Locally:    set DATABRICKS_HOST + DATABRICKS_TOKEN env vars."
     )
 
 
