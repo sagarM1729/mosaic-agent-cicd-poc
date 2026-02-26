@@ -53,13 +53,39 @@ jobs:
           echo "   Gates: Quality (≥80%) | Security (100%) | RAI (≥95%) | Cost (≤5000tk)"
           echo ""
 
-          # Capture full output to extract gate scores
+          # Run the evaluation job and capture output
           EVAL_OUTPUT=$(databricks bundle run mosaic_eval 2>&1) && EVAL_EXIT=0 || EVAL_EXIT=$?
 
           echo "$EVAL_OUTPUT"
 
-          # Extract machine-readable gate results from test.py output
-          GATE_JSON=$(echo "$EVAL_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+          # ── Extract Run ID from bundle output ──────────────────────────────
+          # databricks bundle run prints a line like:
+          #   Run URL: https://...#job/123/run/456
+          RUN_ID=$(echo "$EVAL_OUTPUT" | grep -oP 'run/\K[0-9]+' | tail -1 || echo "")
+          echo "📋 Extracted Run ID: $RUN_ID"
+
+          # ── Fetch notebook output from Databricks API ──────────────────────
+          # The CLI output only shows job metadata; notebook stdout (with CI_GATE_JSON)
+          # must be retrieved via the Jobs API.
+          GATE_JSON=""
+          if [ -n "$RUN_ID" ]; then
+            echo "📡 Fetching notebook output for run $RUN_ID..."
+            NOTEBOOK_OUTPUT=$(databricks jobs get-run-output --run-id "$RUN_ID" 2>&1 || echo "")
+
+            # Try to extract CI_GATE_JSON from notebook output
+            GATE_JSON=$(echo "$NOTEBOOK_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+
+            # If not in get-run-output, try the logs field from the run itself
+            if [ -z "$GATE_JSON" ]; then
+              RUN_DETAILS=$(databricks jobs get-run --run-id "$RUN_ID" 2>&1 || echo "")
+              GATE_JSON=$(echo "$RUN_DETAILS" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+            fi
+          fi
+
+          # Also try extracting directly from EVAL_OUTPUT as a fallback
+          if [ -z "$GATE_JSON" ]; then
+            GATE_JSON=$(echo "$EVAL_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+          fi
 
           if [ -n "$GATE_JSON" ]; then
             echo "gate_results=${GATE_JSON}" >> $GITHUB_OUTPUT

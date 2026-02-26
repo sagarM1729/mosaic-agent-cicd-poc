@@ -354,9 +354,22 @@ gate_output = {
     "security_flags":   results["security_flags"][:5],
     "rai_flags":        results["rai_flags"][:5],
 }
-print(f"CI_GATE_JSON:{json.dumps(gate_output)}")
+gate_json_str = json.dumps(gate_output)
+print(f"CI_GATE_JSON:{gate_json_str}")
 
-# Now fail the job if needed so Databricks Bundle Run returns an exit code of 1
+# Pass gate results back via Databricks notebook exit value
+# This makes results available via: databricks jobs get-run-output --run-id <ID>
+# NOTE: dbutils.notebook.exit() terminates the notebook immediately, so we call
+# it last. For failures, we raise an Exception AFTER exit to signal non-zero status.
+try:
+    if all_gates_pass:
+        dbutils.notebook.exit(f"CI_GATE_JSON:{gate_json_str}")
+    else:
+        # Exit with the JSON data, then raise to signal failure
+        dbutils.notebook.exit(f"CI_GATE_JSON:{gate_json_str}")
+except NameError:
+    pass  # dbutils not available outside Databricks
+
+# Fallback for non-Databricks environments (or if dbutils.notebook.exit didn't terminate)
 if not all_gates_pass:
     sys.exit(1)
-

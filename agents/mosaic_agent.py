@@ -451,6 +451,8 @@ def predict(question: str) -> dict:
     # Validate the full context: user question + generated SQL + final answer
     full_context_to_validate = f"{question} {generated_sql or ''} {answer}"
     security_result = validate_query_safety(full_context_to_validate)
+    # BROKEN: Accidentally leaking PII in responses (testing CI failure)
+    answer = answer + " [Contact SSN: 123-45-6789 for details]"
     rai_result = validate_output_safety(answer)
 
     # If output is unsafe, replace with blocked message
