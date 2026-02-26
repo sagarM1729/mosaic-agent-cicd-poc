@@ -45,41 +45,117 @@ jobs:
           databricks bundle deploy --target default
           echo "✅ Bundle deployed to Databricks workspace"
 
-      # ── STEP 5: Run Evaluation Job (Quality + Security Gate) ─────────────
+      # ── STEP 5: Run Evaluation Job (All CI Gates) ───────────────────────────
       - name: Run Evaluation (test.py via DABs)
         id: run_eval
         run: |
-          echo "🧪 Running evaluation job on ephemeral cluster..."
-          # bundle run exits 1 if job fails (sys.exit(1) from quality gate flows through)
-          # No || true — we WANT this to fail the pipeline if accuracy < 80%
-          if databricks bundle run mosaic_eval; then
+          echo "🧪 Running evaluation with 4 CI gates..."
+          echo "   Gates: Quality (≥80%) | Security (100%) | RAI (≥95%) | Cost (≤5000tk)"
+          echo ""
+
+          # Capture full output to extract gate scores
+          EVAL_OUTPUT=$(databricks bundle run mosaic_eval 2>&1) && EVAL_EXIT=0 || EVAL_EXIT=$?
+
+          echo "$EVAL_OUTPUT"
+
+          # Extract machine-readable gate results from test.py output
+          GATE_JSON=$(echo "$EVAL_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+
+          if [ -n "$GATE_JSON" ]; then
+            echo "gate_results=${GATE_JSON}" >> $GITHUB_OUTPUT
+            echo ""
+            echo "📊 Gate results extracted successfully"
+          else
+            echo "gate_results=" >> $GITHUB_OUTPUT
+            echo "⚠️  Could not extract gate results from job output"
+          fi
+
+          if [ $EVAL_EXIT -eq 0 ]; then
             echo "eval_passed=true" >> $GITHUB_OUTPUT
-            echo "✅ Evaluation PASSED — accuracy >= 80%"
+            echo "✅ All CI gates PASSED"
           else
             echo "eval_passed=false" >> $GITHUB_OUTPUT
-            echo "🚨 Evaluation FAILED — accuracy < 80% or guardrail violation"
+            echo "🚨 CI gate FAILURE — deployment blocked"
             exit 1
           fi
 
-      # ── STEP 6: Publish Step Summary (GitHub UI) ─────────────────────────
+      # ── STEP 6: Publish Detailed Step Summary (GitHub UI) ─────────────────
       - name: Publish Evaluation Summary
         if: always()
         run: |
-          echo "## 🧪 Mosaic Agent Evaluation Results" >> $GITHUB_STEP_SUMMARY
+          echo "## 🧪 Mosaic Agent — CI Gate Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+
+          # ── Pipeline Metadata ──
+          echo "### 📋 Pipeline Metadata" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Git SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Trigger** | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Quality Gate** | ≥ 80% accuracy required |" >> $GITHUB_STEP_SUMMARY
           echo "| **Model** | \`cicd.gold.mosaic_nl_sql_agent\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Status** | ${{ steps.run_eval.outputs.eval_passed == 'true' && '✅ PASSED' || '❌ FAILED' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Pipeline Details" >> $GITHUB_STEP_SUMMARY
-          echo "- **Compute**: Ephemeral single-node cluster via DABs" >> $GITHUB_STEP_SUMMARY
-          echo "- **Evaluation**: 5 smoke + 30 golden questions" >> $GITHUB_STEP_SUMMARY
-          echo "- **Guardrails**: SQL safety + RAI output validation" >> $GITHUB_STEP_SUMMARY
+
+          GATE_JSON='${{ steps.run_eval.outputs.gate_results }}'
+
+          if [ -n "$GATE_JSON" ] && [ "$GATE_JSON" != "" ]; then
+            # Parse scores from JSON
+            Q_SCORE=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['quality_score'])")
+            Q_THRESH=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['quality_threshold'])")
+            Q_PASS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ PASS' if d['quality_pass'] else '❌ FAIL')")
+
+            S_SCORE=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['security_score'])")
+            S_THRESH=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['security_threshold'])")
+            S_PASS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ PASS' if d['security_pass'] else '🚨 FAIL')")
+
+            R_SCORE=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['rai_score'])")
+            R_THRESH=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['rai_threshold'])")
+            R_PASS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ PASS' if d['rai_pass'] else '⚠️ FAIL')")
+
+            C_SCORE=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(int(d['cost_score']))")
+            C_THRESH=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['cost_threshold'])")
+            C_PASS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ PASS' if d['cost_pass'] else '💰 FAIL')")
+
+            ANS_ACC=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['answer_accuracy'])")
+            SQL_RATE=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['sql_pass_rate'])")
+            OVERALL=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ ALL GATES PASSED' if d['overall_pass'] else '🚨 GATE FAILURE')")
+
+            SEC_FLAGS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(', '.join(d.get('security_flags',[])) or 'None')")
+            RAI_FLAGS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(', '.join(d.get('rai_flags',[])) or 'None')")
+
+            # ── Gate Results Table ──
+            echo "### 🔒 CI Gate Results" >> $GITHUB_STEP_SUMMARY
+            echo "| Gate | Score | Threshold | Status |" >> $GITHUB_STEP_SUMMARY
+            echo "|------|-------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+            echo "| **Quality** (Answer + SQL Logic) | ${Q_SCORE}% | ≥ ${Q_THRESH}% | ${Q_PASS} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Security** (Injection, Credentials) | ${S_SCORE}% | ${S_THRESH}% | ${S_PASS} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **RAI** (Toxicity, PII, Size) | ${R_SCORE}% | ≥ ${R_THRESH}% | ${R_PASS} |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Cost** (Avg Tokens/Query) | ${C_SCORE} tk | ≤ ${C_THRESH} tk | ${C_PASS} |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # ── Detailed Breakdown ──
+            echo "### 📊 Detailed Breakdown" >> $GITHUB_STEP_SUMMARY
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+            echo "| Answer Accuracy | ${ANS_ACC}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| SQL Logic Pass Rate | ${SQL_RATE}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| Dual-Gate Accuracy | ${Q_SCORE}% |" >> $GITHUB_STEP_SUMMARY
+            echo "| Security Flags | ${SEC_FLAGS} |" >> $GITHUB_STEP_SUMMARY
+            echo "| RAI Flags | ${RAI_FLAGS} |" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # ── Overall Verdict ──
+            echo "### ${OVERALL}" >> $GITHUB_STEP_SUMMARY
+
+          else
+            # Fallback if gate results weren't extracted
+            echo "### ⚠️ Gate Results Unavailable" >> $GITHUB_STEP_SUMMARY
+            echo "The evaluation job did not produce parseable gate results." >> $GITHUB_STEP_SUMMARY
+            echo "Check the Databricks job logs for details." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Status**: ${{ steps.run_eval.outputs.eval_passed == 'true' && '✅ PASSED' || '❌ FAILED' }}" >> $GITHUB_STEP_SUMMARY
+          fi
 
       # ── STEP 7a: Save current @PROD version (for rollback safety) ────────
       # Read the alias BEFORE touching anything so we can restore it if
