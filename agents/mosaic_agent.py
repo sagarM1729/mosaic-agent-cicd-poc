@@ -265,7 +265,9 @@ def validate_query_safety(sql_or_answer: str) -> dict:
         flags.append("SECURITY:PATH_TRAVERSAL")
     
     # ── Check 4: Command injection markers ────────────────────────────────
-    cmd_patterns = [r'\$\(', r'`[^`]+`', r'\|\s*\w+', r';\s*\w+']
+    # NOTE: Backticks (`col_name`) and semicolons (;) are standard Databricks
+    # SQL syntax, NOT command injection. Only check for actual shell patterns.
+    cmd_patterns = [r'\$\(']   # Subshell injection: $(command)
     for pattern in cmd_patterns:
         if re.search(pattern, text):
             flags.append(f"SECURITY:CMD_INJECTION:{pattern[:20]}")
