@@ -357,19 +357,24 @@ gate_output = {
 gate_json_str = json.dumps(gate_output)
 print(f"CI_GATE_JSON:{gate_json_str}")
 
-# Pass gate results back via Databricks notebook exit value
-# This makes results available via: databricks jobs get-run-output --run-id <ID>
-# NOTE: dbutils.notebook.exit() terminates the notebook immediately, so we call
-# it last. For failures, we raise an Exception AFTER exit to signal non-zero status.
+# ── EXIT LOGIC ─────────────────────────────────────────────────────────────────
+# CRITICAL: dbutils.notebook.exit() ALWAYS terminates with SUCCESS status.
+# So we must ONLY call it when gates pass. For failures, we raise an Exception
+# which Databricks treats as a job FAILURE (non-zero exit code).
+if not all_gates_pass:
+    # Raise exception to make Databricks job fail — this is the ONLY way
+    # to signal failure from a notebook job.
+    raise Exception(
+        f"CI GATE FAILURE — Deployment blocked!\n"
+        f"Quality={gate_output['quality_score']}% "
+        f"Security={gate_output['security_score']}% "
+        f"RAI={gate_output['rai_score']}% "
+        f"Cost={gate_output['cost_score']}tk\n"
+        f"CI_GATE_JSON:{gate_json_str}"
+    )
+
+# Gates passed — exit cleanly with results for Jobs API
 try:
-    if all_gates_pass:
-        dbutils.notebook.exit(f"CI_GATE_JSON:{gate_json_str}")
-    else:
-        # Exit with the JSON data, then raise to signal failure
-        dbutils.notebook.exit(f"CI_GATE_JSON:{gate_json_str}")
+    dbutils.notebook.exit(f"CI_GATE_JSON:{gate_json_str}")
 except NameError:
     pass  # dbutils not available outside Databricks
-
-# Fallback for non-Databricks environments (or if dbutils.notebook.exit didn't terminate)
-if not all_gates_pass:
-    sys.exit(1)
