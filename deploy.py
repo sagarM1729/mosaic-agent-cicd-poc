@@ -98,7 +98,7 @@ class MosaicLangChainAgent(mlflow.pyfunc.PythonModel):
 # ── STEP 2: LOG & REGISTER TO UNITY CATALOG ──────────────────────────────────
 import re, subprocess
 
-UC_MODEL_NAME = "cicd.gold.mosaic_nl_sql_agent"
+UC_MODEL_NAME = "cicd.prod.mosaic_nl_sql_agent"
 mlflow.set_registry_uri("databricks-uc")
 mlflow.set_experiment("/Users/sagarmeshram1729@gmail.com/mosaic-agent-deploy")
 

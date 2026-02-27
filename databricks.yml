@@ -14,7 +14,9 @@ workspace:
 # ── Bundle-level variables (overridden per target) ───────────────────────────
 variables:
   catalog:
-    default: cicd_dev
+    default: cicd
+  schema:
+    default: dev
 
 resources:
   jobs:
@@ -83,11 +85,13 @@ targets:
   dev:
     default: true
     variables:
-      catalog: cicd_dev
+      catalog: cicd
+      schema: dev
 
   prod:
     variables:
-      catalog: cicd_prod
+      catalog: cicd
+      schema: prod
 
 # Sync — files pushed to Databricks workspace on `bundle deploy`
 # Use sync.include for non-YAML files (Python, CSV, txt, etc.)

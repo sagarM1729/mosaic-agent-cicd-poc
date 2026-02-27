@@ -14,7 +14,7 @@ import argparse
 import os
 import sys
 
-UC_MODEL_NAME = os.environ.get("UC_MODEL_NAME", "cicd.gold.mosaic_nl_sql_agent")
+UC_MODEL_NAME = os.environ.get("UC_MODEL_NAME", "cicd.prod.mosaic_nl_sql_agent")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--version", required=True,

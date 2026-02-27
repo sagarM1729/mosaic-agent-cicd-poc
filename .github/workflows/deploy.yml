@@ -60,7 +60,7 @@ jobs:
     needs: pre_checks
     runs-on: ubuntu-latest
     env:
-      UC_MODEL_NAME: cicd_dev.gold.mosaic_nl_sql_agent
+      UC_MODEL_NAME: cicd.dev.mosaic_nl_sql_agent
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -241,7 +241,7 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     env:
-      UC_MODEL_NAME: cicd_prod.gold.mosaic_nl_sql_agent
+      UC_MODEL_NAME: cicd.prod.mosaic_nl_sql_agent
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -280,7 +280,7 @@ jobs:
 
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ✅ Deployment" >> $GITHUB_STEP_SUMMARY
-          echo "- Model registered: \`cicd_prod.gold.mosaic_nl_sql_agent\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Model registered: \`cicd.prod.mosaic_nl_sql_agent\`" >> $GITHUB_STEP_SUMMARY
           echo "- Alias \`@PROD\` updated to latest version" >> $GITHUB_STEP_SUMMARY
           echo "- Inference tables auto-created by \`agents.deploy()\`" >> $GITHUB_STEP_SUMMARY
           echo "- Git SHA: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

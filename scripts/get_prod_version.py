@@ -12,7 +12,7 @@ Prints ONLY the version number (or "none") to stdout — captured by:
 import os
 import sys
 
-UC_MODEL_NAME = os.environ.get("UC_MODEL_NAME", "cicd.gold.mosaic_nl_sql_agent")
+UC_MODEL_NAME = os.environ.get("UC_MODEL_NAME", "cicd.prod.mosaic_nl_sql_agent")
 
 try:
     import mlflow

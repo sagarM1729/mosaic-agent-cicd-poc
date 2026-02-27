@@ -46,13 +46,13 @@ if project_root not in sys.path:
 # ── PARSE CLI ARGS (used when called from GitHub Actions) ─────────────────────
 try:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-name", default="cicd.gold.mosaic_nl_sql_agent")
+    parser.add_argument("--model-name", default="cicd.prod.mosaic_nl_sql_agent")
     parser.add_argument("--git-sha", default="local")
     args = parser.parse_args()
     UC_MODEL_NAME = args.model_name
     GIT_SHA       = args.git_sha
 except SystemExit:
-    UC_MODEL_NAME = "cicd.gold.mosaic_nl_sql_agent"
+    UC_MODEL_NAME = "cicd.prod.mosaic_nl_sql_agent"
     GIT_SHA       = "notebook-run"
 
 print(f"Model name : {UC_MODEL_NAME}")
