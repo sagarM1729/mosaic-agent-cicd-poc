@@ -21,4 +21,5 @@ ignore = [
 # Files that are Databricks notebooks (not standard Python)
 exclude = [
     "deploy.py",
+    "tests/test.py",
 ]
