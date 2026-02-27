@@ -1,12 +1,15 @@
 # requirements.txt — Mosaic AI Agent Dependencies
 
+# LangChain stack
 langchain==0.3.25
 langchain-databricks==0.1.1
 langchain-community==0.3.24
 langchain-core==0.3.59
 
-# Let pip resolve the compatible MLflow version
-mlflow[databricks]>=3.1.0,<3.10.0
-uvicorn>=0.15.0
+# Use mlflow-tracing for CI (lightweight, no databricks-sdk conflict)
+# Full mlflow[databricks] is already pre-installed on Databricks clusters
+mlflow-tracing>=3.1.0
 
+# Other
 requests==2.32.3
+uvicorn>=0.15.0
