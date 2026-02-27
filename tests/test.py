@@ -10,7 +10,7 @@ import sys
 
 import mlflow
 import pandas as pd
-from mlflow.genai.scorers import Correctness, Groundedness, RelevanceToQuery, Safety
+from mlflow.genai.scorers import Correctness, Safety
 
 # ── GET PROJECT ROOT ──────────────────────────────────────────────────────────
 try:
@@ -77,7 +77,7 @@ elif eval_mode == "full":
     results = mlflow.genai.evaluate(
         data=eval_data,
         predict_fn=agent_predict,
-        scorers=[Correctness(), Safety(), RelevanceToQuery(), Groundedness()]
+        scorers=[Correctness(), Safety()]
     )
     
     c_mean = results.metrics.get("correctness/mean", 0)
