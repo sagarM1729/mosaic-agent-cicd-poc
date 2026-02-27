@@ -1,13 +1,14 @@
-# requirements.txt — Mosaic AI Agent Dependencies
+# requirements.txt — GitHub Actions CI runner dependencies
+# Databricks cluster does NOT use this file — it has its own runtime (DBR 16.4 LTS)
 
 # LangChain stack
 langchain==0.3.25
-langchain-databricks==0.1.1
+databricks-langchain>=0.1.0        # replaces deprecated langchain-databricks
 langchain-community==0.3.24
 langchain-core==0.3.59
 
-# Use mlflow-tracing for CI (lightweight, no databricks-sdk conflict)
-# Full mlflow[databricks] is already pre-installed on Databricks clusters
+# MLflow tracing only (lightweight, no databricks-sdk conflict on CI runner)
+# Full mlflow is pre-installed on Databricks clusters
 mlflow-tracing>=3.1.0
 
 # Other

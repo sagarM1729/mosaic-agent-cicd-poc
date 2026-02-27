@@ -72,7 +72,7 @@ def _build_agent():
     Uses ChatDatabricks as the LLM (routes to Databricks Model Serving).
     """
     from langchain_core.prompts import PromptTemplate
-    from langchain_databricks import ChatDatabricks
+    from databricks_langchain import ChatDatabricks
 
     # AgentExecutor / create_react_agent moved across langchain versions
     try:

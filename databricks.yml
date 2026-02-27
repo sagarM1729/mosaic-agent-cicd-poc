@@ -31,7 +31,7 @@ resources:
               eval_mode: "smoke"
               golden_set: "smoke_set.csv"
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: "Standard_D4s_v3"
             num_workers: 0
             data_security_mode: SINGLE_USER
@@ -52,7 +52,7 @@ resources:
               eval_mode: "full"
               golden_set: "golden_set.csv"
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: "Standard_D4s_v3"
             num_workers: 0
             data_security_mode: SINGLE_USER
@@ -70,7 +70,7 @@ resources:
           notebook_task:
             notebook_path: ./scripts/register_model.py
           new_cluster:
-            spark_version: "15.4.x-scala2.12"
+            spark_version: "16.4.x-scala2.12"
             node_type_id: "Standard_D4s_v3"
             num_workers: 0
             data_security_mode: SINGLE_USER
