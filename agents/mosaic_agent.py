@@ -71,8 +71,8 @@ def _build_agent():
     Build the LangChain ReAct agent with two Genie Space tools.
     Uses ChatDatabricks as the LLM (routes to Databricks Model Serving).
     """
-    from langchain_core.prompts import PromptTemplate
     from databricks_langchain import ChatDatabricks
+    from langchain_core.prompts import PromptTemplate
 
     # AgentExecutor / create_react_agent moved across langchain versions
     try:
