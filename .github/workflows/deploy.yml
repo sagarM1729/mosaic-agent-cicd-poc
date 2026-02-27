@@ -135,14 +135,14 @@ jobs:
           if [ -n "$RUN_ID" ]; then
             echo "📡 Fetching notebook output for run $RUN_ID..."
             NOTEBOOK_OUTPUT=$(databricks jobs get-run-output --run-id "$RUN_ID" 2>&1 || echo "")
-            GATE_JSON=$(echo "$NOTEBOOK_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+            GATE_JSON=$(echo "$NOTEBOOK_OUTPUT" | grep "CI_GATE_JSON:" | tail -1 | sed 's/.*CI_GATE_JSON://' || echo "")
             if [ -z "$GATE_JSON" ]; then
               RUN_DETAILS=$(databricks jobs get-run --run-id "$RUN_ID" 2>&1 || echo "")
-              GATE_JSON=$(echo "$RUN_DETAILS" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+              GATE_JSON=$(echo "$RUN_DETAILS" | grep "CI_GATE_JSON:" | tail -1 | sed 's/.*CI_GATE_JSON://' || echo "")
             fi
           fi
           if [ -z "$GATE_JSON" ]; then
-            GATE_JSON=$(echo "$EVAL_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+            GATE_JSON=$(echo "$EVAL_OUTPUT" | grep "CI_GATE_JSON:" | tail -1 | sed 's/.*CI_GATE_JSON://' || echo "")
           fi
 
           if [ -n "$GATE_JSON" ]; then

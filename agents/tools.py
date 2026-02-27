@@ -41,7 +41,7 @@ def _get_auth():
     token = os.environ.get("DATABRICKS_TOKEN", "")
 
     if host and token:
-        print(f"[tools] Auth via env vars ✅  host={host}")
+        # print(f"[tools] Auth via env vars ✅  host={host}")
         return host, {
             "Authorization": f"Bearer {token}",
             "Content-Type":  "application/json",
@@ -97,7 +97,7 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> dict
     if not conversation_id or not message_id:
         return {"answer": f"GENIE_ERROR: Missing ids in start-conversation response: {json.dumps(data)}", "sql": None}
 
-    print(f"  [Genie] conversation={conversation_id}  message={message_id}")
+    # print(f"  [Genie] conversation={conversation_id}  message={message_id}")
 
     # ── Step 2: Poll message until COMPLETED ──────────────────────────────
     poll_url = (
@@ -116,7 +116,7 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> dict
 
         msg_data = poll_resp.json()
         status   = msg_data.get("status", "UNKNOWN")
-        print(f"  [Genie] status={status}")
+        # print(f"  [Genie] status={status}")
 
         if status == "COMPLETED":
             break
@@ -132,7 +132,7 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> dict
     # The message attachments array tells us which attachments have SQL results.
     # We must call a SEPARATE endpoint to get the actual data rows.
     attachments = msg_data.get("attachments", [])
-    print(f"  [Genie] {len(attachments)} attachment(s) in message")
+    # print(f"  [Genie] {len(attachments)} attachment(s) in message")
 
     for attachment in attachments:
         attachment_id = attachment.get("attachment_id") or attachment.get("id")
@@ -141,8 +141,8 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> dict
         if attachment.get("query") is not None and attachment_id:
             # Extract the generated SQL from the query attachment
             generated_sql = attachment.get("query", {}).get("query", None)
-            if generated_sql:
-                print(f"  [Genie] generated SQL: {generated_sql[:120]}...")
+            # if generated_sql:
+            #     print(f"  [Genie] generated SQL: {generated_sql[:120]}...")
 
             query_result_url = (
                 f"{host}/api/2.0/genie/spaces/{space_id}"
@@ -155,10 +155,10 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> dict
                 qr_resp.raise_for_status()
                 qr_data = qr_resp.json()
             except requests.exceptions.RequestException as e:
-                print(f"  [Genie] query-result fetch failed: {e}")
+                # print(f"  [Genie] query-result fetch failed: {e}")
                 continue
 
-            print(f"  [Genie] query-result raw keys: {list(qr_data.keys())}")
+            # print(f"  [Genie] query-result raw keys: {list(qr_data.keys())}")
 
             # Navigate: statement_response → result → data_typed_array
             stmt_resp = qr_data.get("statement_response", {})
@@ -195,7 +195,7 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> dict
 
             # Fallback: check manifest for column names + try other paths
             manifest = stmt_resp.get("manifest", {})
-            print(f"  [Genie] manifest schema: {manifest.get('schema', {})}")
+            # print(f"  [Genie] manifest schema: {manifest.get('schema', {})}")
 
         # ── 3b: Text attachment → return the text directly ────────────────
         text_content = attachment.get("text", {}).get("content", "")
@@ -224,12 +224,12 @@ def sales_genie_tool(question: str) -> str:
 
     Tables available: cicd.gold.fact_sale, cicd.gold.dim_date, cicd.gold.dim_customer
     """
-    print(f"[TOOL] 📊 Routing to Sales_Expert Genie Space: {question}")
+    # print(f"[TOOL] 📊 Routing to Sales_Expert Genie Space: {question}")
     genie_result = _call_genie_space(SALES_GENIE_SPACE_ID, question)
     answer = genie_result["answer"]
     sql    = genie_result.get("sql") or "N/A"
-    print(f"[TOOL] 📊 Sales_Expert result: {answer}")
-    print(f"[TOOL] 📊 Sales_Expert SQL: {sql}")
+    # print(f"[TOOL] 📊 Sales_Expert result: {answer}")
+    # print(f"[TOOL] 📊 Sales_Expert SQL: {sql}")
     
     # ── FIX: Prevent infinite ReAct loops ──────────────────────────────────────
     # If we return a naked number (like '116830'), the agent gets confused, thinks 
@@ -250,12 +250,12 @@ def inventory_genie_tool(question: str) -> str:
 
     Tables available: cicd.gold.dim_stock_item, cicd.gold.dim_date, cicd.gold.fact_stock_holding
     """
-    print(f"[TOOL] 📦 Routing to Inventory_Expert Genie Space: {question}")
+    # print(f"[TOOL] 📦 Routing to Inventory_Expert Genie Space: {question}")
     genie_result = _call_genie_space(INVENTORY_GENIE_SPACE_ID, question)
     answer = genie_result["answer"]
     sql    = genie_result.get("sql") or "N/A"
-    print(f"[TOOL] 📦 Inventory_Expert result: {answer}")
-    print(f"[TOOL] 📦 Inventory_Expert SQL: {sql}")
+    # print(f"[TOOL] 📦 Inventory_Expert result: {answer}")
+    # print(f"[TOOL] 📦 Inventory_Expert SQL: {sql}")
     
     # ── FIX: Prevent infinite ReAct loops ──────────────────────────────────────
     return f"The database returned this exact result: {answer}. [SQL_USED: {sql}] You must now output 'Final Answer: {answer}'"
