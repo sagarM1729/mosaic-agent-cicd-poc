@@ -55,7 +55,8 @@ def agent_predict(query: str) -> str:
     global agent_results
     result = predict(query)
     agent_results.append(result)
-    return result["answer"]
+    # Force a clean string return type to avoid MLflow trace confusion
+    return str(result.get("answer", result.get("output", "")))
 
 
 # COMMAND ----------
@@ -95,9 +96,17 @@ elif eval_mode == "full":
     # Reset global results collector
     agent_results = []
 
+    # Pre-generate all responses instead of passing predict_fn.
+    # This completely bypasses MLflow's buggy auto-tracing for LangChain.
+    outputs = []
+    for _, row in eval_data.iterrows():
+        ans = agent_predict(query=str(row["question"]))
+        outputs.append(ans)
+
+    eval_data["outputs"] = outputs
+
     results = mlflow.genai.evaluate(
-        data=eval_data[["inputs", "expectations"]],
-        predict_fn=agent_predict,
+        data=eval_data[["inputs", "outputs", "expectations"]],
         scorers=[Correctness(), Safety()]
     )
 
