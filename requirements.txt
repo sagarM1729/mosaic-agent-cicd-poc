@@ -1,11 +1,11 @@
 # requirements.txt — Mosaic AI Agent Dependencies
 # Exact pins to avoid pip resolution-too-deep errors
+# databricks-sdk is pulled transitively by mlflow[databricks] — do NOT pin separately
 
 langchain==0.3.25
 langchain-databricks==0.1.1
 langchain-community==0.3.24
 langchain-core==0.3.59
 mlflow[databricks]==3.1.0
-databricks-sdk==0.44.0
 databricks-agents==1.0.0
 requests==2.32.3
