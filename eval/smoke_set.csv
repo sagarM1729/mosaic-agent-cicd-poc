@@ -1,0 +1,6 @@
+question,expected_answer,expected_keywords
+What is the total profit generated in July?,2902877.0,"fact_sale, profit"
+How many unique stock items exist?,227,"dim_stock_item, count"
+What is the total sales excluding tax in July?,5773005.0,"fact_sale, excluding_tax"
+Which bin has highest stock?,L-3,"fact_stock_holding"
+How many unique customers purchased in July?,666,"fact_sale, count, customer"

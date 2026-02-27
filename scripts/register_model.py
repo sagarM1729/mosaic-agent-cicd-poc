@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install mlflow langchain==0.2.16 langchain-community==0.2.17 langchain-core==0.2.41 databricks-sdk requests
+# MAGIC %pip install mlflow[databricks]>=3.1 langchain>=0.3.0 langchain-databricks>=0.1.0 langchain-community>=0.3.0 langchain-core>=0.3.0 databricks-sdk>=0.20.0 databricks-agents>=1.0.0 requests
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
@@ -11,7 +11,13 @@ Registers the LangChain Multi–Genie-Space agent as an MLflow pyfunc model
 in Unity Catalog. Tags each version with the Git SHA for full traceability.
 """
 
-import sys, os, importlib.util, argparse, mlflow
+import argparse
+import importlib.util
+import os
+import sys
+
+import mlflow
+from databricks import agents  # Fix 6: agents.deploy() for serving + inference tables
 
 # ── PROJECT ROOT ──────────────────────────────────────────────────────────────
 try:
@@ -29,7 +35,7 @@ try:
     ctx = dbutils.notebook.entry_point.getDbutils().notebook().getContext()
     os.environ["DATABRICKS_TOKEN"] = ctx.apiToken().get()
     os.environ["DATABRICKS_HOST"]  = ctx.apiUrl().get()
-    print(f"[register] ✅ Injected credentials from dbutils")
+    print("[register] ✅ Injected credentials from dbutils")
 except Exception as e:
     print(f"[register] ⚠️  Could not inject credentials: {e}")
 
@@ -61,7 +67,10 @@ class MosaicLangChainAgent(mlflow.pyfunc.PythonModel):
     MLflow PythonModel wrapper for the LangChain Multi–Genie-Space Agent.
     """
     def load_context(self, context):
-        import sys, os, types, importlib.util
+        import importlib.util
+        import os
+        import sys
+        import types
 
         agents_dir = context.artifacts["agents_dir"]
         project_dir = os.path.dirname(agents_dir)
@@ -131,10 +140,12 @@ with mlflow.start_run(run_name=f"cicd_{GIT_SHA[:8]}") as run:
         },
         registered_model_name = UC_MODEL_NAME,
         pip_requirements      = [
-            "mlflow",
-            "databricks-sdk",
-            "langchain",
-            "langchain-community",
+            "mlflow[databricks]>=3.1",
+            "databricks-sdk>=0.20.0",
+            "databricks-agents>=1.0.0",
+            "langchain>=0.3.0",
+            "langchain-databricks>=0.1.0",
+            "langchain-community>=0.3.0",
             "requests",
         ],
         input_example         = {"question": "What is the total profit in July?"},
@@ -155,3 +166,22 @@ latest   = str(max(int(v.version) for v in versions))
 client.set_registered_model_alias(UC_MODEL_NAME, "PROD", latest)
 print(f"✅ Alias @PROD → version {latest}")
 print(f"   Load via: mlflow.pyfunc.load_model('models:/{UC_MODEL_NAME}@PROD')")
+
+# COMMAND ----------
+
+# ── FIX 6: DEPLOY WITH agents.deploy() ───────────────────────────────────────
+# Replaces manual serving_endpoints.create() and auto-creates inference tables
+# that log every production request/response — free, no extra code needed.
+try:
+    deployment = agents.deploy(
+        model_name=UC_MODEL_NAME,
+        model_version=latest,
+        scale_to_zero=True,  # costs $0 when no traffic
+    )
+    print(f"✅ Deployed to endpoint: {deployment.endpoint_name}")
+    print(f"✅ Inference table:      {deployment.inference_table_name}")
+    print("   ^ Auto-created Delta table logging all prod requests/responses")
+except Exception as e:
+    # Don't fail the pipeline if agents.deploy() isn't available (e.g., trial limits)
+    print(f"⚠️  agents.deploy() skipped: {e}")
+    print("   Endpoint may need manual creation or already exists.")

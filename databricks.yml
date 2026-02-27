@@ -1,6 +1,9 @@
 # Databricks Asset Bundle configuration
 # Used by DABs CLI: `databricks bundle deploy` / `databricks bundle run`
 # See: https://docs.databricks.com/dev-tools/bundles/index.html
+#
+# Fix 4: dev + prod targets using Unity Catalog schema isolation
+# Fix 5: Smoke eval (5 questions) + Full eval (30 questions) job split
 
 bundle:
   name: mosaic-nl-sql-agent
@@ -8,15 +11,23 @@ bundle:
 workspace:
   host: https://adb-7405619257134796.16.azuredatabricks.net
 
+# ── Bundle-level variables (overridden per target) ───────────────────────────
+variables:
+  catalog:
+    default: cicd_dev
+
 resources:
   jobs:
-    # ── EVALUATION JOB (triggered by CI/CD) ─────────────────────────────────
-    mosaic_eval:
-      name: "mosaic-agent-evaluation"
+    # ── SMOKE EVAL (PR — fast, 5 questions, keyword gates only) ──────────────
+    mosaic_smoke_eval:
+      name: "mosaic-agent-smoke-eval"
       tasks:
-        - task_key: run_tests
+        - task_key: smoke_test
           notebook_task:
             notebook_path: ./tests/test.py
+            base_parameters:
+              eval_mode: "smoke"
+              golden_set: "smoke_set.csv"
           new_cluster:
             spark_version: "15.4.x-scala2.12"
             node_type_id: "Standard_D4s_v3"
@@ -28,7 +39,28 @@ resources:
             custom_tags:
               ResourceClass: SingleNode
 
-    # ── REGISTRATION JOB (only after eval passes) ──────────────────────────
+    # ── FULL EVAL (main merge — 30 questions + all CI gates) ─────────────────
+    mosaic_full_eval:
+      name: "mosaic-agent-full-eval"
+      tasks:
+        - task_key: full_test
+          notebook_task:
+            notebook_path: ./tests/test.py
+            base_parameters:
+              eval_mode: "full"
+              golden_set: "golden_set.csv"
+          new_cluster:
+            spark_version: "15.4.x-scala2.12"
+            node_type_id: "Standard_D4s_v3"
+            num_workers: 0
+            data_security_mode: SINGLE_USER
+            spark_conf:
+              spark.databricks.cluster.profile: singleNode
+              spark.master: "local[*]"
+            custom_tags:
+              ResourceClass: SingleNode
+
+    # ── REGISTRATION JOB (only after eval passes) ────────────────────────────
     mosaic_register:
       name: "mosaic-agent-register"
       tasks:
@@ -45,6 +77,17 @@ resources:
               spark.master: "local[*]"
             custom_tags:
               ResourceClass: SingleNode
+
+# ── TARGETS: dev (default) and prod ──────────────────────────────────────────
+targets:
+  dev:
+    default: true
+    variables:
+      catalog: cicd_dev
+
+  prod:
+    variables:
+      catalog: cicd_prod
 
 # Sync — files pushed to Databricks workspace on `bundle deploy`
 # Use sync.include for non-YAML files (Python, CSV, txt, etc.)

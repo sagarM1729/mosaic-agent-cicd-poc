@@ -1,0 +1,11 @@
+# requirements.txt — Mosaic AI Agent Dependencies
+# Fix 3: Updated versions for langchain 0.3.x compatibility
+
+langchain>=0.3.0,<0.4.0
+langchain-databricks>=0.1.0        # ChatDatabricks now lives here (was in langchain-community)
+langchain-community>=0.3.0,<0.4.0
+langchain-core>=0.3.0,<0.4.0
+mlflow[databricks]>=3.1            # needed for new eval features + tracing
+databricks-sdk>=0.20.0
+databricks-agents>=1.0.0           # for agents.deploy() in Fix 6
+requests

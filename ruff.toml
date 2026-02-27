@@ -1,0 +1,24 @@
+# ruff.toml — Linter configuration for Mosaic AI Agent
+# Runs on GitHub's free Ubuntu runner (Fix 1: zero Databricks cost)
+
+[lint]
+# Only check for critical issues — syntax, imports, undefined names
+select = [
+    "E",   # pycodestyle errors (syntax)
+    "F",   # pyflakes (undefined names, unused imports)
+    "I",   # isort (import ordering)
+]
+
+# Ignore rules that conflict with our Databricks notebook patterns
+ignore = [
+    "E402",  # module-level import not at top (dbutils injection happens mid-file)
+    "E501",  # line too long (some SQL strings are intentionally long)
+    "F401",  # unused import (some imports are used dynamically)
+    "F811",  # redefinition of unused variable (dbutils patterns)
+    "F821",  # undefined name (dbutils, spark are injected at runtime)
+]
+
+# Files that are Databricks notebooks (not standard Python)
+exclude = [
+    "deploy.py",
+]

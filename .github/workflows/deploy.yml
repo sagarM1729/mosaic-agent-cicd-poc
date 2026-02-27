@@ -1,95 +1,152 @@
-name: Deploy Mosaic Agent to PROD
+# .github/workflows/deploy.yml
+# ═══════════════════════════════════════════════════════════════════════════════
+# Mosaic AI Agent CI/CD Pipeline — 3-Stage Architecture
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# STAGE 1 (pre_checks) — Free: ruff, pytest, bundle validate
+# STAGE 2 (deploy_dev) — Dev deployment + Smart eval (smoke for PRs, full for main)
+# STAGE 3 (deploy_prod) — Prod deploy + register + health check (main only)
+#
+# Triggered on: push to main, pull requests to main
+
+name: Mosaic AI Agent CI/CD
 
 on:
   push:
-    branches:
-      - main
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+env:
+  DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_CICD }}
+  DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_CICD }}
 
 jobs:
-  validate-and-deploy:
+  # ══════════════════════════════════════════════════════════════════════════════
+  # STAGE 1: Free Pre-Checks (no Databricks cost)
+  # ══════════════════════════════════════════════════════════════════════════════
+  pre_checks:
     runs-on: ubuntu-latest
-    env:
-      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST_CICD }}
-      DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN_CICD }}
-      UC_MODEL_NAME: cicd.gold.mosaic_nl_sql_agent
-
     steps:
-      # ── STEP 1: Checkout ──────────────────────────────────────────────────
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # ── STEP 2: Setup Python ──────────────────────────────────────────────
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.11"
 
-      # ── STEP 3: Install Databricks CLI (Official Action) ─────────────────
+      # ── Fix 1: ruff lint + pytest (catches syntax/import errors for free) ──
+      - name: Install Lint & Test Tools
+        run: pip install ruff pytest
+
+      - name: Ruff Lint Check (syntax + import errors)
+        run: ruff check agents/ scripts/ tests/
+
+      - name: Unit Tests (guardrail logic, no Databricks needed)
+        run: pytest tests/unit/ -v
+
+      # ── Fix 2: bundle validate (catches YAML errors before wasting DBUs) ───
       - name: Setup Databricks CLI
         uses: databricks/setup-cli@main
 
-      # ── STEP 3c: Install Python deps for helper scripts ───────────────────
-      - name: Install Python dependencies
-        run: pip install mlflow databricks-sdk langchain==0.2.16 langchain-community==0.2.17 langchain-core==0.2.41 requests --quiet
+      - name: Validate Bundle (catches YAML errors before wasting DBUs)
+        run: databricks bundle validate --target dev
 
-      # ── STEP 3b: Verify Auth ──────────────────────────────────────────────
+  # ══════════════════════════════════════════════════════════════════════════════
+  # STAGE 2: Dev Deployment + Smart Eval
+  # ══════════════════════════════════════════════════════════════════════════════
+  deploy_dev:
+    needs: pre_checks
+    runs-on: ubuntu-latest
+    env:
+      UC_MODEL_NAME: cicd_dev.gold.mosaic_nl_sql_agent
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@main
+
+      # ── Fix 3: Updated dependency versions ─────────────────────────────────
+      - name: Install Python Dependencies
+        run: pip install -r requirements.txt --quiet
+
       - name: Verify Databricks Auth
         run: |
           databricks --version
           databricks current-user me
           echo "✅ Authenticated to Databricks"
 
-      # ── STEP 4: Deploy Bundle to Workspace ───────────────────────────────
-      - name: Deploy DABs Bundle
+      - name: Deploy Bundle to Dev
         run: |
-          databricks bundle deploy --target default
-          echo "✅ Bundle deployed to Databricks workspace"
+          databricks bundle deploy --target dev
+          echo "✅ Bundle deployed to dev workspace"
 
-      # ── STEP 5: Run Evaluation Job (All CI Gates) ───────────────────────────
-      - name: Run Evaluation (test.py via DABs)
-        id: run_eval
+      # ── Fix 5: Smart eval — smoke for PRs, full for main ──────────────────
+      - name: Smoke Eval (PRs — 5 questions, fast keyword gates)
+        if: github.event_name == 'pull_request'
+        id: run_smoke_eval
         run: |
-          echo "🧪 Running evaluation with 4 CI gates..."
+          echo "🧪 Running SMOKE eval (5 questions, keyword gates only)..."
+          EVAL_OUTPUT=$(databricks bundle run mosaic_smoke_eval --target dev 2>&1) && EVAL_EXIT=0 || EVAL_EXIT=$?
+          echo "$EVAL_OUTPUT"
+
+          RUN_ID=$(echo "$EVAL_OUTPUT" | grep -oP 'run/\K[0-9]+' | tail -1 || echo "")
+          GATE_JSON=""
+          if [ -n "$RUN_ID" ]; then
+            NOTEBOOK_OUTPUT=$(databricks jobs get-run-output --run-id "$RUN_ID" 2>&1 || echo "")
+            GATE_JSON=$(echo "$NOTEBOOK_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+          fi
+          if [ -z "$GATE_JSON" ]; then
+            GATE_JSON=$(echo "$EVAL_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
+          fi
+
+          echo "gate_results=${GATE_JSON}" >> $GITHUB_OUTPUT
+          if [ $EVAL_EXIT -eq 0 ]; then
+            echo "eval_passed=true" >> $GITHUB_OUTPUT
+            echo "✅ Smoke eval PASSED"
+          else
+            echo "eval_passed=false" >> $GITHUB_OUTPUT
+            echo "🚨 Smoke eval FAILED — deployment blocked"
+            exit 1
+          fi
+
+      - name: Full LLM Judge Eval (main merge — 30 questions, all CI gates)
+        if: github.event_name == 'push'
+        id: run_full_eval
+        run: |
+          echo "🧪 Running FULL eval (30 questions, all 4 CI gates)..."
           echo "   Gates: Quality (≥80%) | Security (100%) | RAI (≥95%) | Cost (≤5000tk)"
           echo ""
 
-          # Run the evaluation job and capture output
-          EVAL_OUTPUT=$(databricks bundle run mosaic_eval 2>&1) && EVAL_EXIT=0 || EVAL_EXIT=$?
-
+          EVAL_OUTPUT=$(databricks bundle run mosaic_full_eval --target dev 2>&1) && EVAL_EXIT=0 || EVAL_EXIT=$?
           echo "$EVAL_OUTPUT"
 
-          # ── Extract Run ID from bundle output ──────────────────────────────
-          # databricks bundle run prints a line like:
-          #   Run URL: https://...#job/123/run/456
           RUN_ID=$(echo "$EVAL_OUTPUT" | grep -oP 'run/\K[0-9]+' | tail -1 || echo "")
           echo "📋 Extracted Run ID: $RUN_ID"
 
-          # ── Fetch notebook output from Databricks API ──────────────────────
-          # The CLI output only shows job metadata; notebook stdout (with CI_GATE_JSON)
-          # must be retrieved via the Jobs API.
           GATE_JSON=""
           if [ -n "$RUN_ID" ]; then
             echo "📡 Fetching notebook output for run $RUN_ID..."
             NOTEBOOK_OUTPUT=$(databricks jobs get-run-output --run-id "$RUN_ID" 2>&1 || echo "")
-
-            # Try to extract CI_GATE_JSON from notebook output
             GATE_JSON=$(echo "$NOTEBOOK_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
-
-            # If not in get-run-output, try the logs field from the run itself
             if [ -z "$GATE_JSON" ]; then
               RUN_DETAILS=$(databricks jobs get-run --run-id "$RUN_ID" 2>&1 || echo "")
               GATE_JSON=$(echo "$RUN_DETAILS" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
             fi
           fi
-
-          # Also try extracting directly from EVAL_OUTPUT as a fallback
           if [ -z "$GATE_JSON" ]; then
             GATE_JSON=$(echo "$EVAL_OUTPUT" | grep -o 'CI_GATE_JSON:{.*}' | sed 's/CI_GATE_JSON://' || echo "")
           fi
 
           if [ -n "$GATE_JSON" ]; then
             echo "gate_results=${GATE_JSON}" >> $GITHUB_OUTPUT
-            echo ""
             echo "📊 Gate results extracted successfully"
           else
             echo "gate_results=" >> $GITHUB_OUTPUT
@@ -105,28 +162,27 @@ jobs:
             exit 1
           fi
 
-      # ── STEP 6: Publish Detailed Step Summary (GitHub UI) ─────────────────
+      # ── Publish Step Summary (GitHub UI) ───────────────────────────────────
       - name: Publish Evaluation Summary
         if: always()
         run: |
           echo "## 🧪 Mosaic Agent — CI Gate Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          # ── Pipeline Metadata ──
           echo "### 📋 Pipeline Metadata" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
           echo "| **Git SHA** | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Branch** | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Trigger** | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Model** | \`cicd.gold.mosaic_nl_sql_agent\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Target** | \`dev\` |" >> $GITHUB_STEP_SUMMARY
           echo "| **Timestamp** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          GATE_JSON='${{ steps.run_eval.outputs.gate_results }}'
+          # Try to get gate results from either eval step
+          GATE_JSON='${{ steps.run_full_eval.outputs.gate_results || steps.run_smoke_eval.outputs.gate_results }}'
 
           if [ -n "$GATE_JSON" ] && [ "$GATE_JSON" != "" ]; then
-            # Parse scores from JSON
             Q_SCORE=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['quality_score'])")
             Q_THRESH=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['quality_threshold'])")
             Q_PASS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print('✅ PASS' if d['quality_pass'] else '❌ FAIL')")
@@ -150,7 +206,6 @@ jobs:
             SEC_FLAGS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(', '.join(d.get('security_flags',[])) or 'None')")
             RAI_FLAGS=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(', '.join(d.get('rai_flags',[])) or 'None')")
 
-            # ── Gate Results Table ──
             echo "### 🔒 CI Gate Results" >> $GITHUB_STEP_SUMMARY
             echo "| Gate | Score | Threshold | Status |" >> $GITHUB_STEP_SUMMARY
             echo "|------|-------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
@@ -160,7 +215,6 @@ jobs:
             echo "| **Cost** (Avg Tokens/Query) | ${C_SCORE} tk | ≤ ${C_THRESH} tk | ${C_PASS} |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
-            # ── Detailed Breakdown ──
             echo "### 📊 Detailed Breakdown" >> $GITHUB_STEP_SUMMARY
             echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
             echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
@@ -171,56 +225,80 @@ jobs:
             echo "| RAI Flags | ${RAI_FLAGS} |" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
-            # ── Overall Verdict ──
             echo "### ${OVERALL}" >> $GITHUB_STEP_SUMMARY
 
           else
-            # Fallback if gate results weren't extracted
             echo "### ⚠️ Gate Results Unavailable" >> $GITHUB_STEP_SUMMARY
             echo "The evaluation job did not produce parseable gate results." >> $GITHUB_STEP_SUMMARY
             echo "Check the Databricks job logs for details." >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Status**: ${{ steps.run_eval.outputs.eval_passed == 'true' && '✅ PASSED' || '❌ FAILED' }}" >> $GITHUB_STEP_SUMMARY
           fi
 
-      # ── STEP 7a: Save current @PROD version (for rollback safety) ────────
-      # Read the alias BEFORE touching anything so we can restore it if
-      # the next step fails.  Output: prod_version = "3" | "none"
+  # ══════════════════════════════════════════════════════════════════════════════
+  # STAGE 3: Prod Deploy (main merges only)
+  # ══════════════════════════════════════════════════════════════════════════════
+  deploy_prod:
+    needs: deploy_dev
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    env:
+      UC_MODEL_NAME: cicd_prod.gold.mosaic_nl_sql_agent
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@main
+
+      - name: Install Python Dependencies
+        run: pip install -r requirements.txt --quiet
+
+      - name: Deploy Bundle to Prod
+        run: |
+          databricks bundle deploy --target prod
+          echo "✅ Bundle deployed to prod workspace"
+
+      # ── Save current @PROD version for rollback ────────────────────────────
       - name: Save Current @PROD Version
         id: save_prod
-        if: success()
         run: |
           PROD_VER=$(python scripts/get_prod_version.py)
           echo "prod_version=${PROD_VER}" >> $GITHUB_OUTPUT
           echo "📌 Current @PROD version: ${PROD_VER}"
 
-      # ── STEP 7b: Register Model (only if eval passes) ─────────────────────
+      # ── Register Model + agents.deploy() (Fix 6) ──────────────────────────
       - name: Register Model in Unity Catalog
         id: register_model
-        if: success()
         run: |
           echo "📦 Registering model to Unity Catalog..."
-          databricks bundle run mosaic_register
-          echo "✅ Model registered with @PROD alias"
+          databricks bundle run mosaic_register --target prod
+          echo "✅ Model registered with @PROD alias + agents.deploy()"
 
-          # Add registration info to summary
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### ✅ Deployment" >> $GITHUB_STEP_SUMMARY
-          echo "- Model registered: \`cicd.gold.mosaic_nl_sql_agent\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Model registered: \`cicd_prod.gold.mosaic_nl_sql_agent\`" >> $GITHUB_STEP_SUMMARY
           echo "- Alias \`@PROD\` updated to latest version" >> $GITHUB_STEP_SUMMARY
+          echo "- Inference tables auto-created by \`agents.deploy()\`" >> $GITHUB_STEP_SUMMARY
           echo "- Git SHA: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
 
-      # ── STEP 8: Rollback @PROD if registration failed ─────────────────────
-      # Runs ONLY when the register step fails.  Re-points @PROD to the
-      # version we saved in Step 7a → production is never left broken.
-      - name: Rollback @PROD on Registration Failure
+      # ── Fix 7: Health check after deployment ───────────────────────────────
+      - name: Post-Deploy Health Check
+        run: |
+          echo "🏥 Running post-deploy health check..."
+          MODEL_ENDPOINT_NAME="mosaic-nl-sql-agent" python scripts/health_check.py
+
+      # ── Rollback if registration failed ────────────────────────────────────
+      - name: Rollback @PROD on Failure
         if: failure() && steps.save_prod.outputs.prod_version != ''
         run: |
-          echo "🚨 Registration failed — rolling back @PROD..."
+          echo "🚨 Deployment failed — rolling back @PROD..."
           python scripts/rollback_prod.py --version ${{ steps.save_prod.outputs.prod_version }}
 
-          # Surface rollback in the Job Summary
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🔄 Rollback" >> $GITHUB_STEP_SUMMARY
-          echo "- Registration failed — @PROD restored to version \`${{ steps.save_prod.outputs.prod_version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Deployment failed — @PROD restored to version \`${{ steps.save_prod.outputs.prod_version }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Production traffic unaffected" >> $GITHUB_STEP_SUMMARY

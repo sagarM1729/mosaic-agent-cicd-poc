@@ -16,16 +16,16 @@ Two tools:
   2. inventory_genie_tool → Inventory_Expert Genie Space
 """
 
+import json
 import os
 import time
-import json
+
 import requests
 
 from agents.config import (
-    SALES_GENIE_SPACE_ID,
     INVENTORY_GENIE_SPACE_ID,
+    SALES_GENIE_SPACE_ID,
 )
-
 
 # ── DATABRICKS AUTH ──────────────────────────────────────────────────────────
 # The calling notebook (test.py / deploy.py / register_model.py) extracts

@@ -10,7 +10,9 @@ Usage:
     python scripts/rollback_prod.py --version none   # no-op (first deploy failed)
 """
 
-import os, sys, argparse
+import argparse
+import os
+import sys
 
 UC_MODEL_NAME = os.environ.get("UC_MODEL_NAME", "cicd.gold.mosaic_nl_sql_agent")
 
@@ -32,7 +34,7 @@ try:
     client.set_registered_model_alias(UC_MODEL_NAME, "PROD", args.version)
     print(f"✅ ROLLBACK COMPLETE: @PROD → version {args.version}")
     print(f"   Model: {UC_MODEL_NAME}")
-    print(f"   Production traffic restored to the last known-good version.")
+    print("   Production traffic restored to the last known-good version.")
 
 except Exception as e:
     # Rollback itself failed — alert loudly but don't mask the original failure

@@ -9,12 +9,20 @@ The LLM (Claude 3.7 Sonnet via Databricks Model Serving) acts as the
 "brain" that reads the user's question, picks the right Genie Space,
 and formats the final answer.
 
-Includes: Security guardrails, RAI output validation, cost tracking.
+Includes: Security guardrails, RAI output validation, cost tracking,
+          MLflow tracing for full observability.
 """
 
 import os
 import re
 import time
+
+import mlflow
+
+# ── Fix 8: Enable MLflow tracing — shows full internal call graph ─────────────
+# In the MLflow UI → Experiments → any run → "Traces" tab you'll see:
+#   ▼ agent_run → guardrail_check → genie_tool_call → claude_llm_call → output_filter
+mlflow.tracing.enable()
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 from agents.config import MODEL_ENDPOINT
@@ -63,8 +71,8 @@ def _build_agent():
     Build the LangChain ReAct agent with two Genie Space tools.
     Uses ChatDatabricks as the LLM (routes to Databricks Model Serving).
     """
-    from langchain_community.chat_models import ChatDatabricks
     from langchain_core.prompts import PromptTemplate
+    from langchain_databricks import ChatDatabricks
 
     # AgentExecutor / create_react_agent moved across langchain versions
     try:
@@ -79,7 +87,7 @@ def _build_agent():
         from langchain_core.tools import Tool
 
     # ── Import our Genie tools ────────────────────────────────────────────
-    from agents.tools import sales_genie_tool, inventory_genie_tool
+    from agents.tools import inventory_genie_tool, sales_genie_tool
 
     # ── LLM: Databricks Foundation Model ──────────────────────────────────
     llm = ChatDatabricks(
@@ -184,175 +192,9 @@ def _get_agent():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  GUARDRAILS (Production-Grade: Security + RAI + Toxicity)
+#  GUARDRAILS — imported from agents/guardrails.py (testable without Databricks)
 # ══════════════════════════════════════════════════════════════════════════════
-
-# ── Response size config (not a hard cutoff — scored proportionally) ──────────
-MAX_RESPONSE_LENGTH = 2000   # Soft limit: answers above this get flagged
-CRITICAL_RESPONSE_LENGTH = 5000  # Hard limit: answers above this are blocked
-
-# ── Toxicity keyword list (lowercase) ─────────────────────────────────────────
-# These are common terms that should NEVER appear in a data analytics response.
-# Kept intentionally minimal to avoid false positives on legitimate data values.
-_TOXIC_KEYWORDS = [
-    "kill", "murder", "suicide", "rape", "terrorist", "bomb",
-    "hate speech", "racial slur", "white supremac", "nazi",
-    "profanity", "f**k", "sh*t", "damn", "bastard",
-    "exploit", "hack", "malware", "ransomware",
-]
-
-# ── DML / DDL / Injection patterns ────────────────────────────────────────────
-_FORBIDDEN_SQL_KEYWORDS = [
-    "DROP", "DELETE", "UPDATE", "INSERT", "GRANT", "TRUNCATE",
-    "ALTER", "CREATE", "EXEC", "EXECUTE", "UNION SELECT",
-    "OR 1=1", "OR '1'='1'", "--", ";--", "/*", "*/",
-    "INFORMATION_SCHEMA", "SYSOBJECTS", "SYSCOLUMNS",
-]
-
-# ── Credential / secret patterns ──────────────────────────────────────────────
-_CREDENTIAL_PATTERNS = [
-    r'(?i)(password|passwd|pwd)\s*[:=]\s*\S+',
-    r'(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*\S+',
-    r'(?i)(bearer\s+[a-zA-Z0-9\-_.]+)',
-    r'dapi[a-f0-9]{32}',                   # Databricks PAT token pattern
-    r'(?i)BEGIN\s+(RSA\s+)?PRIVATE\s+KEY',  # Private keys
-]
-
-# ── PII patterns ──────────────────────────────────────────────────────────────
-_PII_PATTERNS = [
-    (r'\d{3}-\d{2}-\d{4}',                       "SSN"),
-    (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',  "Email"),
-    (r'\b\d{3}[-.]?\d{3}[-.]?\d{4}\b',           "Phone"),       # US phone
-    (r'\b\d{4}[- ]?\d{4}[- ]?\d{4}[- ]?\d{4}\b', "CreditCard"), # 16-digit card
-]   
-
-
-def validate_query_safety(sql_or_answer: str) -> dict:
-    """
-    SECURITY GATE: Production-grade security validation.
-    
-    Checks for: SQL injection, DML/DDL leakage, credential exposure,
-    path traversal, and command injection patterns.
-    
-    Returns:
-        dict with keys: passed (bool), score (0.0-1.0), flags (list), details (str)
-        score = 1.0 means fully safe, 0.0 means critical violation.
-    """
-    text = str(sql_or_answer).strip()
-    text_upper = text.upper()
-    flags = []
-    
-    # ── Check 1: DML / DDL / SQL Injection ────────────────────────────────
-    for keyword in _FORBIDDEN_SQL_KEYWORDS:
-        # If the keyword is purely alphabetic (like DROP, SELECT), use word boundaries
-        # to prevent catching 'executive' (EXEC) or 'alternative' (ALTER).
-        if re.match(r'^[A-Za-z\s]+$', keyword):
-            pattern = r'\b' + keyword + r'\b'
-            if re.search(pattern, text, re.IGNORECASE):
-                flags.append(f"SECURITY:SQL_INJECTION:{keyword}")
-        else:
-            # For symbols like '--', '/*', 'OR 1=1', use simple substring match
-            if keyword.upper() in text_upper:
-                flags.append(f"SECURITY:SQL_INJECTION:{keyword}")
-    
-    # ── Check 2: Credential / secret leakage ──────────────────────────────
-    for pattern in _CREDENTIAL_PATTERNS:
-        if re.search(pattern, text):
-            flags.append(f"SECURITY:CREDENTIAL_LEAK:{pattern[:30]}")
-    
-    # ── Check 3: Path traversal ───────────────────────────────────────────
-    if "../" in text or "..\\" in text:
-        flags.append("SECURITY:PATH_TRAVERSAL")
-    
-    # ── Check 4: Command injection markers ────────────────────────────────
-    # NOTE: Backticks (`col_name`) and semicolons (;) are standard Databricks
-    # SQL syntax, NOT command injection. Only check for actual shell patterns.
-    cmd_patterns = [r'\$\(']   # Subshell injection: $(command)
-    for pattern in cmd_patterns:
-        if re.search(pattern, text):
-            flags.append(f"SECURITY:CMD_INJECTION:{pattern[:20]}")
-    
-    # ── Score calculation ─────────────────────────────────────────────────
-    if not flags:
-        score = 1.0
-    elif any("SQL_INJECTION" in f for f in flags):
-        score = 0.0  # Critical: zero tolerance for SQL injection
-    elif any("CREDENTIAL_LEAK" in f for f in flags):
-        score = 0.1  # Critical: credential exposure
-    else:
-        score = max(0.0, 1.0 - (len(flags) * 0.3))
-    
-    passed = len(flags) == 0
-    details = "Security check passed" if passed else f"Violations: {', '.join(flags)}"
-    
-    return {"passed": passed, "score": score, "flags": flags, "details": details}
-
-
-def validate_output_safety(answer: str) -> dict:
-    """
-    RAI GATE: Production-grade Responsible AI validation.
-    
-    Checks for: PII leakage, toxicity, data dumps, response size,
-    and content safety.
-    
-    Returns:
-        dict with keys: passed (bool), score (0.0-1.0), flags (list), details (str)
-        score = 1.0 means fully safe, 0.0 means critical violation.
-    """
-    answer_str = str(answer)
-    answer_lower = answer_str.lower()
-    flags = []
-    deductions = 0.0
-    
-    # ── Check 1: PII Detection ────────────────────────────────────────────
-    for pattern, pii_type in _PII_PATTERNS:
-        matches = re.findall(pattern, answer_str)
-        if matches:
-            flags.append(f"RAI:PII_{pii_type}:found_{len(matches)}")
-            deductions += 0.4  # Severe: PII leakage
-    
-    # ── Check 2: Toxicity / Harmful Content ───────────────────────────────
-    toxic_found = []
-    for keyword in _TOXIC_KEYWORDS:
-        if keyword in answer_lower:
-            toxic_found.append(keyword)
-    if toxic_found:
-        flags.append(f"RAI:TOXICITY:{','.join(toxic_found[:5])}")
-        deductions += 0.5  # Severe: toxic content
-    
-    # ── Check 3: Response Size (scored, not hard cutoff) ──────────────────
-    length = len(answer_str)
-    if length > CRITICAL_RESPONSE_LENGTH:
-        flags.append(f"RAI:RESPONSE_TOO_LARGE:{length}_chars")
-        deductions += 0.5  # Hard block for massive responses
-    elif length > MAX_RESPONSE_LENGTH:
-        flags.append(f"RAI:RESPONSE_LARGE:{length}_chars")
-        deductions += 0.2  # Warning: unusually large response
-    
-    # ── Check 4: Data Dump Detection ──────────────────────────────────────
-    newline_count = answer_str.count('\n')
-    if newline_count > 50:
-        flags.append(f"RAI:DATA_DUMP:massive_{newline_count}_lines")
-        deductions += 0.5
-    elif newline_count > 20:
-        flags.append(f"RAI:DATA_DUMP:{newline_count}_lines")
-        deductions += 0.2
-    
-    # ── Check 5: Repetitive content (hallucination indicator) ─────────────
-    words = answer_lower.split()
-    if len(words) > 10:
-        unique_ratio = len(set(words)) / len(words)
-        if unique_ratio < 0.3:
-            flags.append(f"RAI:HALLUCINATION:repetitive_content_{unique_ratio:.2f}")
-            deductions += 0.3
-    
-    # ── Score calculation ─────────────────────────────────────────────────
-    score = max(0.0, 1.0 - deductions)
-    passed = len(flags) == 0
-    details = "RAI check passed" if passed else f"Flags: {', '.join(flags)}"
-    
-    return {"passed": passed, "score": score, "flags": flags, "details": details}
-
+from agents.guardrails import validate_output_safety, validate_query_safety
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  MAIN PREDICTION FUNCTION

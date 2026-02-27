@@ -9,7 +9,8 @@ Prints ONLY the version number (or "none") to stdout — captured by:
     echo "prod_version=$(python scripts/get_prod_version.py)" >> $GITHUB_OUTPUT
 """
 
-import os, sys
+import os
+import sys
 
 UC_MODEL_NAME = os.environ.get("UC_MODEL_NAME", "cicd.gold.mosaic_nl_sql_agent")
 
