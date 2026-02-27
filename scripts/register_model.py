@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install mlflow[databricks]>=3.1 langchain>=0.3.0 langchain-databricks>=0.1.0 langchain-community>=0.3.0 langchain-core>=0.3.0 databricks-sdk>=0.20.0 databricks-agents>=1.0.0 requests
+# MAGIC %pip install mlflow[databricks]>=3.1.0,<3.10.0 langchain==0.3.25 langchain-databricks==0.1.1 langchain-community==0.3.24 langchain-core==0.3.59 requests
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
@@ -140,12 +140,11 @@ with mlflow.start_run(run_name=f"cicd_{GIT_SHA[:8]}") as run:
         },
         registered_model_name = UC_MODEL_NAME,
         pip_requirements      = [
-            "mlflow[databricks]>=3.1",
-            "databricks-sdk>=0.20.0",
-            "databricks-agents>=1.0.0",
-            "langchain>=0.3.0",
-            "langchain-databricks>=0.1.0",
-            "langchain-community>=0.3.0",
+            "mlflow[databricks]>=3.1.0,<3.10.0",
+            "langchain==0.3.25",
+            "langchain-databricks==0.1.1",
+            "langchain-community==0.3.24",
+            "langchain-core==0.3.59",
             "requests",
         ],
         input_example         = {"question": "What is the total profit in July?"},
