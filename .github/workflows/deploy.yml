@@ -187,14 +187,7 @@ jobs:
               echo "✅ All CI gates PASSED"
             else
               echo "eval_passed=false" >> $GITHUB_OUTPUT
-              FAILED=$(echo "$GATE_JSON" | python3 -c "
-import sys,json; d=json.load(sys.stdin)
-f=[]
-if not d['quality_pass']: f.append(f\"Quality ({d['quality_score']}% < {d['quality_threshold']}%)\")
-if not d['security_pass']: f.append(f\"Security ({d['security_score']}% < {d['security_threshold']}%)\")
-if not d['rai_pass']: f.append(f\"RAI ({d['rai_score']}% < {d['rai_threshold']}%)\")
-if not d['cost_pass']: f.append(f\"Cost ({int(d['cost_score'])} > {d['cost_threshold']})\")
-print(', '.join(f))" 2>/dev/null || echo "gates breached")
+              FAILED=$(echo "$GATE_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);f=[];not d.get('quality_pass') and f.append('Quality ('+str(d['quality_score'])+'%% < '+str(d['quality_threshold'])+'%%)');not d.get('security_pass') and f.append('Security ('+str(d['security_score'])+'%% < '+str(d['security_threshold'])+'%%)');not d.get('rai_pass') and f.append('RAI ('+str(d['rai_score'])+'%% < '+str(d['rai_threshold'])+'%%)');not d.get('cost_pass') and f.append('Cost ('+str(int(d['cost_score']))+' > '+str(d['cost_threshold'])+')');print(', '.join(f))" 2>/dev/null || echo "gates breached")
               echo "🚨 CI gate FAILURE: $FAILED"
               exit 1
             fi
