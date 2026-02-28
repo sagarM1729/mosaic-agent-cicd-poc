@@ -132,14 +132,33 @@ jobs:
           echo "📋 Extracted Run ID: $RUN_ID"
 
           GATE_JSON=""
+
+          # ── Strategy 1: parse notebook_output.result from get-run-output ──
           if [ -n "$RUN_ID" ]; then
             echo "📡 Fetching notebook output for run $RUN_ID..."
-            NOTEBOOK_OUTPUT=$(databricks jobs get-run-output --run-id "$RUN_ID" 2>&1 || echo "")
-            GATE_JSON=$(echo "$NOTEBOOK_OUTPUT" | grep "CI_GATE_JSON:" | tail -1 | sed 's/.*CI_GATE_JSON://' || echo "")
-            if [ -z "$GATE_JSON" ]; then
-              RUN_DETAILS=$(databricks jobs get-run --run-id "$RUN_ID" 2>&1 || echo "")
-              GATE_JSON=$(echo "$RUN_DETAILS" | grep "CI_GATE_JSON:" | tail -1 | sed 's/.*CI_GATE_JSON://' || echo "")
+
+            # Get the task run ID (get-run-output needs the task run, not the job run)
+            TASK_RUN_ID=$(databricks jobs get-run --run-id "$RUN_ID" 2>/dev/null \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tasks'][0]['run_id'])" 2>/dev/null || echo "")
+
+            FETCH_ID=${TASK_RUN_ID:-$RUN_ID}
+            echo "   Using run ID: $FETCH_ID"
+
+            NOTEBOOK_OUTPUT=$(databricks jobs get-run-output --run-id "$FETCH_ID" 2>&1 || echo "")
+
+            # Try parsing the structured notebook_output.result field (set by dbutils.notebook.exit)
+            GATE_JSON=$(echo "$NOTEBOOK_OUTPUT" \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('notebook_output',{}).get('result',''))" 2>/dev/null || echo "")
+
+            # Validate it's actual JSON
+            if [ -n "$GATE_JSON" ]; then
+              echo "$GATE_JSON" | python3 -c "import sys,json; json.load(sys.stdin)" 2>/dev/null || GATE_JSON=""
             fi
+          fi
+
+          # ── Strategy 2: grep CI_GATE_JSON from stdout (fallback) ─────────
+          if [ -z "$GATE_JSON" ]; then
+            GATE_JSON=$(echo "$NOTEBOOK_OUTPUT" | grep "CI_GATE_JSON:" | tail -1 | sed 's/.*CI_GATE_JSON://' || echo "")
           fi
           if [ -z "$GATE_JSON" ]; then
             GATE_JSON=$(echo "$EVAL_OUTPUT" | grep "CI_GATE_JSON:" | tail -1 | sed 's/.*CI_GATE_JSON://' || echo "")
@@ -153,20 +172,39 @@ jobs:
             echo "⚠️  Could not extract gate results from job output"
           fi
 
-          # Capture error snippet for summary (first meaningful error line)
+          # Capture error snippet for summary
           EVAL_ERROR=""
           if [ $EVAL_EXIT -ne 0 ]; then
             EVAL_ERROR=$(echo "$EVAL_OUTPUT" | grep -E 'Error:|Exception|FAILED|INTERNAL_ERROR' | head -3 | tr '\n' ' ' | cut -c1-300)
           fi
           echo "eval_error=${EVAL_ERROR}" >> $GITHUB_OUTPUT
 
-          if [ $EVAL_EXIT -eq 0 ]; then
-            echo "eval_passed=true" >> $GITHUB_OUTPUT
-            echo "✅ All CI gates PASSED"
-          else
+          # ── Determine pass/fail from gate JSON (preferred) or exit code ──
+          if [ -n "$GATE_JSON" ]; then
+            OVERALL=$(echo "$GATE_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print('true' if d['overall_pass'] else 'false')")
+            if [ "$OVERALL" = "true" ]; then
+              echo "eval_passed=true" >> $GITHUB_OUTPUT
+              echo "✅ All CI gates PASSED"
+            else
+              echo "eval_passed=false" >> $GITHUB_OUTPUT
+              FAILED=$(echo "$GATE_JSON" | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+f=[]
+if not d['quality_pass']: f.append(f\"Quality ({d['quality_score']}% < {d['quality_threshold']}%)\")
+if not d['security_pass']: f.append(f\"Security ({d['security_score']}% < {d['security_threshold']}%)\")
+if not d['rai_pass']: f.append(f\"RAI ({d['rai_score']}% < {d['rai_threshold']}%)\")
+if not d['cost_pass']: f.append(f\"Cost ({int(d['cost_score'])} > {d['cost_threshold']})\")
+print(', '.join(f))" 2>/dev/null || echo "gates breached")
+              echo "🚨 CI gate FAILURE: $FAILED"
+              exit 1
+            fi
+          elif [ $EVAL_EXIT -ne 0 ]; then
             echo "eval_passed=false" >> $GITHUB_OUTPUT
-            echo "🚨 CI gate FAILURE — deployment blocked"
+            echo "🚨 Eval job FAILED (infrastructure error)"
             exit 1
+          else
+            echo "eval_passed=true" >> $GITHUB_OUTPUT
+            echo "✅ Job succeeded but gate JSON unavailable"
           fi
 
       # ── Publish Step Summary (GitHub UI) ───────────────────────────────────

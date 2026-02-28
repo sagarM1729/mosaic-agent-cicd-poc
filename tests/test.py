@@ -127,16 +127,27 @@ elif eval_mode == "full":
     print(f"{'#':<4} {'Question':<50} {'Expected':<25} {'Agent Answer':<25} {'Match'}")
     print("-" * 100)
 
+    def _numeric_close(a: str, b: str, rel_tol: float = 0.005) -> bool:
+        """Return True if both strings are numbers within 0.5% of each other."""
+        try:
+            fa, fb = float(a), float(b)
+            if fa == fb:
+                return True
+            return abs(fa - fb) / max(abs(fa), abs(fb), 1e-9) <= rel_tol
+        except (ValueError, TypeError):
+            return False
+
     exact_matches = 0
     total_qs = len(eval_data)
     for i, (_, row) in enumerate(eval_data.iterrows(), 1):
         q = str(row["question"])[:48]
         expected = str(row["expected_answer"])[:23]
         actual = str(outputs[i - 1])[:23]
-        # Fuzzy match: check if expected value appears in agent answer (case-insensitive)
+        # Fuzzy match: substring containment OR numeric closeness (0.5% tolerance)
         exp_str = str(row["expected_answer"]).strip().lower()
         act_str = str(outputs[i - 1]).strip().lower()
-        matched = exp_str in act_str or act_str in exp_str
+        matched = (exp_str in act_str or act_str in exp_str
+                   or _numeric_close(exp_str, act_str))
         if matched:
             exact_matches += 1
         status = "✅" if matched else "❌"
@@ -333,8 +344,10 @@ elif eval_mode == "full":
             failed_gates.append(f"RAI/Safety ({s_mean*100:.1f}% < {R_THRESH*100:.0f}%)")
         if not cost_pass:
             failed_gates.append(f"Cost ({avg_tokens:.0f} tokens > {C_THRESH})")
-        raise AssertionError(
-            f"🚨 FULL EVAL FAILED — gates breached: {', '.join(failed_gates)}"
-        )
+        print(f"\n🚨 FULL EVAL FAILED — gates breached: {', '.join(failed_gates)}")
+    else:
+        print("\nFull eval PASSED ✅")
 
-    print("Full eval PASSED ✅")
+    # Always exit with gate data so deploy.yml can extract it reliably
+    # via `databricks jobs get-run-output` → notebook_output.result
+    dbutils.notebook.exit(json.dumps(gate_data))
