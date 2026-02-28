@@ -12,6 +12,16 @@ import mlflow
 import pandas as pd
 from mlflow.genai.scorers import Correctness, Safety
 
+# ── Configure MLflow for LLM judge scoring ────────────────────────────────────
+# The Correctness/Safety scorers need a judge model endpoint. On Databricks,
+# setting deployments target to "databricks" lets them auto-discover endpoints.
+try:
+    import mlflow.deployments
+    mlflow.deployments.set_deployments_target("databricks")
+except Exception:
+    pass
+print(f"[test] MLflow version: {mlflow.__version__}")
+
 # ── GET PROJECT ROOT ──────────────────────────────────────────────────────────
 try:
     notebook_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
@@ -67,8 +77,8 @@ golden_set_file = dbutils.widgets.get("golden_set")
 # ── SET UNITY CATALOG CONTEXT ─────────────────────────────────────────────────
 catalog = dbutils.widgets.get("catalog")   # e.g. "cicd"
 schema  = dbutils.widgets.get("schema")    # e.g. "dev" or "prod"
-spark.sql(f"USE CATALOG {catalog}")
-spark.sql(f"USE SCHEMA {schema}")
+spark.sql(f"USE CATALOG `{catalog}`")
+spark.sql(f"USE SCHEMA `{catalog}`.`{schema}`")
 print(f"[test] Using catalog={catalog}, schema={schema}")
 
 golden_csv_path = os.path.join(project_root, "eval", golden_set_file)
@@ -144,12 +154,39 @@ elif eval_mode == "full":
     mlflow_metrics = {}
     mlflow_judge_ok = False
 
+    # Set experiment so evaluate() has a valid context for logging
     try:
-        results = mlflow.genai.evaluate(
-            data=eval_data[["inputs", "outputs", "expectations"]],
-            scorers=[Correctness(), Safety()]
-        )
+        mlflow.set_experiment("/Users/sagarmeshram1729@gmail.com/mosaic-agent-eval")
+    except Exception:
+        pass
+
+    try:
+        # Run evaluate inside an active MLflow run — required for
+        # the LLM judge scorers to log per-row assessments and metrics
+        with mlflow.start_run(run_name=f"full_eval_{eval_mode}"):
+            results = mlflow.genai.evaluate(
+                data=eval_data[["inputs", "outputs", "expectations"]],
+                scorers=[Correctness(), Safety()]
+            )
         mlflow_metrics = results.metrics or {}
+
+        # Debug: show ALL keys returned so we can spot version differences
+        print(f"\n  [debug] mlflow.genai.evaluate() returned {len(mlflow_metrics)} metric(s)")
+        for k, v in mlflow_metrics.items():
+            print(f"    {k} = {v}")
+
+        # Debug: show per-row scores from the eval table
+        try:
+            eval_table = results.tables.get("eval_results", None)
+            if eval_table is None:
+                eval_table = getattr(results, "table", None)
+            if eval_table is not None and hasattr(eval_table, "columns"):
+                score_cols = [c for c in eval_table.columns if "correct" in c.lower() or "safe" in c.lower() or "score" in c.lower()]
+                if score_cols:
+                    print(f"  [debug] Per-row score columns: {score_cols}")
+                    print(eval_table[score_cols].head(5).to_string())
+        except Exception as dbg_err:
+            print(f"  [debug] Could not read eval table: {dbg_err}")
 
         # MLflow metric keys vary across versions — try all known patterns
         c_key_candidates = [
@@ -163,7 +200,6 @@ elif eval_mode == "full":
         for k in c_key_candidates:
             if k in mlflow_metrics and mlflow_metrics[k] is not None:
                 c_mean = float(mlflow_metrics[k])
-                # Normalize: if value > 1 it's already a percentage
                 if c_mean > 1.0:
                     c_mean = c_mean / 100.0
                 break
@@ -179,6 +215,8 @@ elif eval_mode == "full":
 
     except Exception as e:
         print(f"\n  ⚠️  MLflow genai.evaluate() failed: {e}")
+        import traceback
+        traceback.print_exc()
         print("      Falling back to answer-match scoring.\n")
 
     print("\n" + "=" * 60)

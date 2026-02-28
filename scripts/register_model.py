@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install databricks-langchain>=0.1.0 langchain==0.3.25 langchain-community==0.3.24 langchain-core==0.3.59 requests
+# MAGIC %pip install databricks-langchain>=0.1.0 langchain==0.3.25 langchain-community==0.3.24 langchain-core==0.3.59 requests databricks-agents
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
@@ -17,7 +17,6 @@ import os
 import sys
 
 import mlflow
-from databricks import agents  # Fix 6: agents.deploy() for serving + inference tables
 
 # ── PROJECT ROOT ──────────────────────────────────────────────────────────────
 try:
@@ -172,6 +171,7 @@ print(f"   Load via: mlflow.pyfunc.load_model('models:/{UC_MODEL_NAME}@PROD')")
 # Replaces manual serving_endpoints.create() and auto-creates inference tables
 # that log every production request/response — free, no extra code needed.
 try:
+    from databricks import agents
     deployment = agents.deploy(
         model_name=UC_MODEL_NAME,
         model_version=latest,
