@@ -78,7 +78,7 @@ golden_set_file = dbutils.widgets.get("golden_set")
 catalog = dbutils.widgets.get("catalog")   # e.g. "cicd"
 schema  = dbutils.widgets.get("schema")    # e.g. "dev" or "prod"
 spark.sql(f"USE CATALOG `{catalog}`")
-spark.sql(f"USE SCHEMA `{catalog}`.`{schema}`")
+spark.sql(f"USE SCHEMA `{schema}`")
 print(f"[test] Using catalog={catalog}, schema={schema}")
 
 golden_csv_path = os.path.join(project_root, "eval", golden_set_file)

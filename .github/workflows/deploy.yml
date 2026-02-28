@@ -153,6 +153,13 @@ jobs:
             echo "⚠️  Could not extract gate results from job output"
           fi
 
+          # Capture error snippet for summary (first meaningful error line)
+          EVAL_ERROR=""
+          if [ $EVAL_EXIT -ne 0 ]; then
+            EVAL_ERROR=$(echo "$EVAL_OUTPUT" | grep -E 'Error:|Exception|FAILED|INTERNAL_ERROR' | head -3 | tr '\n' ' ' | cut -c1-300)
+          fi
+          echo "eval_error=${EVAL_ERROR}" >> $GITHUB_OUTPUT
+
           if [ $EVAL_EXIT -eq 0 ]; then
             echo "eval_passed=true" >> $GITHUB_OUTPUT
             echo "✅ All CI gates PASSED"
@@ -230,7 +237,21 @@ jobs:
           else
             echo "### ⚠️ Gate Results Unavailable" >> $GITHUB_STEP_SUMMARY
             echo "The evaluation job did not produce parseable gate results." >> $GITHUB_STEP_SUMMARY
-            echo "Check the Databricks job logs for details." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # Show error details if available
+            EVAL_ERROR='${{ steps.run_full_eval.outputs.eval_error || steps.run_smoke_eval.outputs.eval_error }}'
+            EVAL_PASSED='${{ steps.run_full_eval.outputs.eval_passed || steps.run_smoke_eval.outputs.eval_passed }}'
+            if [ -n "$EVAL_ERROR" ] && [ "$EVAL_ERROR" != "" ]; then
+              echo "### 🔴 Error Details" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              echo "$EVAL_ERROR" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+            if [ "$EVAL_PASSED" = "false" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "> **Status:** Evaluation FAILED — deployment blocked. Check [Databricks job logs](${{ secrets.DATABRICKS_HOST_CICD }}) for full details." >> $GITHUB_STEP_SUMMARY
+            fi
           fi
 
   # ══════════════════════════════════════════════════════════════════════════════
