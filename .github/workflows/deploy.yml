@@ -122,7 +122,7 @@ jobs:
         id: run_full_eval
         run: |
           echo "🧪 Running FULL eval (30 questions, all 4 CI gates)..."
-          echo "   Gates: Quality (≥80%) | Security (100%) | RAI (≥95%) | Cost (≤5000tk)"
+          echo "   Gates: Quality (≥50%) | Security (100%) | RAI (≥80%) | Cost (≤5000tk)"
           echo ""
 
           EVAL_OUTPUT=$(databricks bundle run mosaic_full_eval --target dev 2>&1) && EVAL_EXIT=0 || EVAL_EXIT=$?

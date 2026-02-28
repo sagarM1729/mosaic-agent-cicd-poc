@@ -73,9 +73,6 @@ resources:
         - task_key: register_model
           notebook_task:
             notebook_path: ./scripts/register_model.py
-            base_parameters:
-              catalog: ${var.catalog}
-              schema: ${var.schema}
           new_cluster:
             spark_version: "16.4.x-scala2.12"
             node_type_id: "Standard_D4s_v3"

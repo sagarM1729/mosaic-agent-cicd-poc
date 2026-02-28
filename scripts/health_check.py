@@ -21,6 +21,7 @@ w = WorkspaceClient()
 
 # ── Wait for endpoint to finish updating (max 5 min) ─────────────────────────
 print(f"🔍 Checking endpoint: {endpoint_name}")
+state = "UNKNOWN"
 for attempt in range(30):
     try:
         endpoint = w.serving_endpoints.get(endpoint_name)
