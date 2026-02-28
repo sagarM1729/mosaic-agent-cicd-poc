@@ -331,7 +331,8 @@ elif eval_mode == "full":
     }
 
     print("\n###CI_GATE_START###")
-    print(f"CI_GATE_JSON:{json.dumps(gate_data)}")
+    gate_json_str = json.dumps(gate_data)
+    print(f"CI_GATE_JSON:{gate_json_str}")
     print("###CI_GATE_END###\n")
 
     if not overall_pass:
@@ -344,10 +345,11 @@ elif eval_mode == "full":
             failed_gates.append(f"RAI/Safety ({s_mean*100:.1f}% < {R_THRESH*100:.0f}%)")
         if not cost_pass:
             failed_gates.append(f"Cost ({avg_tokens:.0f} tokens > {C_THRESH})")
-        print(f"\n🚨 FULL EVAL FAILED — gates breached: {', '.join(failed_gates)}")
+        msg = f"\n🚨 FULL EVAL FAILED — gates breached: {', '.join(failed_gates)}"
+        print(msg)
+        # Raise to signal task failure — gate JSON is in the printed output + exception
+        # so deploy.yml can still extract it via grep from the error trace
+        raise Exception(msg + f"\nCI_GATE_JSON:{gate_json_str}")
     else:
         print("\nFull eval PASSED ✅")
-
-    # Always exit with gate data so deploy.yml can extract it reliably
-    # via `databricks jobs get-run-output` → notebook_output.result
-    dbutils.notebook.exit(json.dumps(gate_data))
+        dbutils.notebook.exit(gate_json_str)
