@@ -1,5 +1,5 @@
 # Databricks notebook source
-# MAGIC %pip install databricks-langchain>=0.1.0 langchain==0.3.25 langchain-community==0.3.24 langchain-core==0.3.59 requests
+# MAGIC %pip install databricks-langchain>=0.1.0 langchain==0.3.25 langchain-community==0.3.24 langchain-core==0.3.59 requests databricks-agents
 # MAGIC dbutils.library.restartPython()
 # MAGIC
 
@@ -42,7 +42,6 @@ except Exception:
 
 # Load the custom predict function
 from agents.mosaic_agent import predict
-
 
 # ── MLflow 3.x predict_fn contract ───────────────────────────────────────────
 # mlflow.genai.evaluate() calls predict_fn(**inputs_dict), so the function

@@ -170,12 +170,14 @@ print(f"   Load via: mlflow.pyfunc.load_model('models:/{UC_MODEL_NAME}@PROD')")
 # ── FIX 6: DEPLOY WITH agents.deploy() ───────────────────────────────────────
 # Replaces manual serving_endpoints.create() and auto-creates inference tables
 # that log every production request/response — free, no extra code needed.
+ENDPOINT_NAME = "mosaic-nl-sql-agent"
 try:
     from databricks import agents
     deployment = agents.deploy(
         model_name=UC_MODEL_NAME,
         model_version=latest,
         scale_to_zero=True,  # costs $0 when no traffic
+        endpoint_name=ENDPOINT_NAME,
     )
     print(f"✅ Deployed to endpoint: {deployment.endpoint_name}")
     print(f"✅ Inference table:      {deployment.inference_table_name}")
