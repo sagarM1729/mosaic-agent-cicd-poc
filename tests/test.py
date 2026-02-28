@@ -63,6 +63,14 @@ def agent_predict(query: str) -> str:
 
 eval_mode = dbutils.widgets.get("eval_mode")  # "smoke" or "full"
 golden_set_file = dbutils.widgets.get("golden_set")
+
+# ── SET UNITY CATALOG CONTEXT ─────────────────────────────────────────────────
+catalog = dbutils.widgets.get("catalog")   # e.g. "cicd"
+schema  = dbutils.widgets.get("schema")    # e.g. "dev" or "prod"
+spark.sql(f"USE CATALOG {catalog}")
+spark.sql(f"USE SCHEMA {schema}")
+print(f"[test] Using catalog={catalog}, schema={schema}")
+
 golden_csv_path = os.path.join(project_root, "eval", golden_set_file)
 
 eval_data = pd.read_csv(golden_csv_path)

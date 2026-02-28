@@ -154,8 +154,8 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> dict
                 qr_resp = requests.get(query_result_url, headers=headers, timeout=30)
                 qr_resp.raise_for_status()
                 qr_data = qr_resp.json()
-            except requests.exceptions.RequestException as e:
-                # print(f"  [Genie] query-result fetch failed: {e}")
+            except requests.exceptions.RequestException:
+                # print(f"  [Genie] query-result fetch failed")
                 continue
 
             # print(f"  [Genie] query-result raw keys: {list(qr_data.keys())}")
@@ -194,7 +194,7 @@ def _call_genie_space(space_id: str, question: str, max_wait: int = 120) -> dict
                 return {"answer": str(data_array[0][0]), "sql": generated_sql}
 
             # Fallback: check manifest for column names + try other paths
-            manifest = stmt_resp.get("manifest", {})
+            # manifest = stmt_resp.get("manifest", {})
             # print(f"  [Genie] manifest schema: {manifest.get('schema', {})}")
 
         # ── 3b: Text attachment → return the text directly ────────────────
