@@ -209,3 +209,17 @@ Both are executed through `tests/test.py` in notebook-job mode.
 - `requirements.txt` is primarily for CI runner dependencies.
 - Databricks jobs install notebook dependencies with `%pip` and use Databricks runtime libraries.
 - Unit tests under `tests/unit` are intentionally Databricks-independent.
+
+
+  ## Results
+- <img width="1888" height="570" alt="Screenshot From 2026-03-20 21-27-46" src="https://github.com/user-attachments/assets/e8bb5732-c2d2-4858-82cb-12fd38cc3ace" />
+
+<img width="1758" height="948" alt="Screenshot From 2026-03-20 21-28-18" src="https://github.com/user-attachments/assets/cf831cf9-d5fc-437f-a583-9354d63461ff" />
+
+<img width="1758" height="948" alt="Screenshot From 2026-03-20 21-28-30" src="https://github.com/user-attachments/assets/f7ced437-fe6e-443d-9d23-49a34166baa9" />
+
+<img width="1901" height="807" alt="Screenshot From 2026-03-20 21-29-12" src="https://github.com/user-attachments/assets/8bbdf148-facd-4803-9ddf-77cf3ec6b033" />
+
+
+
+
